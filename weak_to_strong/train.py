@@ -269,7 +269,8 @@ def train_and_save_model(
         if save_path:
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
             (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
-                save_path
+                save_path,
+                safe_serialization=False
             )
             print("saved", save_path)
 
