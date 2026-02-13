@@ -19,7 +19,7 @@ classifiers = [
 dependencies=[
   "torch ~= 2.1",
   "numpy ~= 1.24",
-  "transformers ~= 4.36",
+  "transformers == 4.36",
   "datasets ~= 2.14",
   "fire ~= 0.4",
   "accelerate ~= 0.25",
