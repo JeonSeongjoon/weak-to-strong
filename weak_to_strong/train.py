@@ -209,7 +209,7 @@ def train_and_save_model(
                     k.replace("transformer.module", "transformer"): v
                     for (k, v) in state_dict.items()
                 }
-                custom_kwargs["state_dict"] = state_dict
+                model.load_state_dict(state_dict, strict=False)
             return True
         return False
 
