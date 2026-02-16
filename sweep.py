@@ -15,12 +15,14 @@ def main(model_sizes: Union[List[str], str], **kwargs):
         and "weak_labels_path" not in kwargs
     ), "Need to use model_sizes when using sweep.py"
     basic_args = [sys.executable, os.path.join(os.path.dirname(__file__), "train_simple.py")]
+    w2s_loss = kwargs.pop("loss", "xent")
+    
     for key, value in kwargs.items():
         basic_args.extend([f"--{key}", str(value)])
 
     print("Running ground truth models")
     for model_size in model_sizes:
-        subprocess.run(basic_args + ["--model_size", model_size], check=True)
+        subprocess.run(basic_args + ["--model_size", model_size, "--loss", "xent"], check=True)
 
     print("Running transfer models")
     for i in range(len(model_sizes)):
@@ -30,7 +32,7 @@ def main(model_sizes: Union[List[str], str], **kwargs):
             print(f"Running weak {weak_model_size} to strong {strong_model_size}")
             subprocess.run(
                 basic_args
-                + ["--weak_model_size", weak_model_size, "--model_size", strong_model_size],
+                + ["--weak_model_size", weak_model_size, "--model_size", strong_model_size, "--loss", w2s_loss],
                 check=True,
             )
 

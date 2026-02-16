@@ -198,9 +198,11 @@ def train_and_save_model(
         if os.path.exists(os.path.join(save_path, "results.pkl")) and not force_retrain:
             print("loading from", save_path)
             checkpoint_path = os.path.join(save_path, "pytorch_model.bin")
+            index_path = os.path.join(save_path, "pytorch_model.bin.index.json")
+
             if not os.path.exists(checkpoint_path):
                 # Assume this means we have a sharded checkpoint, and load it appropriately
-                load_sharded_checkpoint(model, checkpoint_path)
+                load_sharded_checkpoint(model, index_path)
             else:
                 state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
                 state_dict = {
