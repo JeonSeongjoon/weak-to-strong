@@ -202,7 +202,7 @@ def train_and_save_model(
 
             if not os.path.exists(checkpoint_path):
                 # Assume this means we have a sharded checkpoint, and load it appropriately
-                load_sharded_checkpoint(model, index_path)
+                load_sharded_checkpoint(model, save_path)
             else:
                 state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
                 state_dict = {
