@@ -67,7 +67,7 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=True,
+        model_parallel=False,
         # note: you will probably not be able to run this without many gpus
         custom_kwargs={
             "trust_remote_code": True,
@@ -81,7 +81,7 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=True,
+        model_parallel=False,
         # note: you will probably not be able to run this bf16 support and without many gpus
         custom_kwargs={
             "trust_remote_code": True,
