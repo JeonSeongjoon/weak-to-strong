@@ -19,9 +19,9 @@ def main(model_sizes: Union[List[str], str], **kwargs):
     
     for key, value in kwargs.items():
         basic_args.extend([f"--{key}", str(value)])
-
+    
     print("Running ground truth models")
-    if not w2s_loss == 'logconf':
+    if w2s_loss not in ['logconf', 're-logconf']:
       for model_size in model_sizes:
           subprocess.run(basic_args + ["--model_size", model_size], check=True)
     else:
@@ -35,10 +35,11 @@ def main(model_sizes: Union[List[str], str], **kwargs):
             print(f"Running weak {weak_model_size} to strong {strong_model_size}")
             subprocess.run(
                 basic_args
-                + ["--weak_model_size", weak_model_size, "--model_size", strong_model_size, "--loss", w2s_loss],
+                + ["--weak_model_size", weak_model_size, "--model_size", strong_model_size],
                 check=True,
             )
 
 
 if __name__ == "__main__":
     fire.Fire(main)
+    #python sweep.py --model_sizes=gpt2,gpt2-medium,gpt2-large --seed=0 --ds_name=cosmos_qa

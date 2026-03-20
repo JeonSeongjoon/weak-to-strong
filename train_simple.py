@@ -13,7 +13,13 @@ import weak_to_strong.logger as logger
 from weak_to_strong.common import get_tokenizer
 from weak_to_strong.datasets import (VALID_DATASETS, load_dataset,
                                      tokenize_dataset)
-from weak_to_strong.loss import logconf_loss_fn, product_loss_fn, xent_loss
+from weak_to_strong.loss import (logconf_loss_fn, 
+    product_loss_fn, 
+    xent_loss, 
+    reverse_kl_loss, 
+    reverse_ce_loss, 
+    reverse_logconf_loss_fn
+    )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
 # NOTE learning rates are not particularly tuned, work somewhat reasonably at train batch size 32
@@ -67,7 +73,7 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=False,
+        model_parallel=True,
         # note: you will probably not be able to run this without many gpus
         custom_kwargs={
             "trust_remote_code": True,
@@ -81,7 +87,7 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=False,
+        model_parallel=True,
         # note: you will probably not be able to run this bf16 support and without many gpus
         custom_kwargs={
             "trust_remote_code": True,
@@ -117,6 +123,9 @@ loss_dict = {
     "logconf": logconf_loss_fn(),
     "product": product_loss_fn(),
     "xent": xent_loss(),
+    "re-kl": reverse_kl_loss(), 
+    "re-ce": reverse_ce_loss(), 
+    "re-logconf": reverse_logconf_loss_fn()
 }
 
 VALID_LOSSES: List[str] = list(loss_dict.keys())
@@ -145,7 +154,7 @@ def main(
     batch_size: int = 32,
     max_ctx: int = 1024,
     ds_name: str = "sciq",
-    loss: str = "xent",
+    loss: str = "re-kl",
     n_docs: int = 20000,
     n_test_docs: int = 10000,
     model_size: str = "gpt2",
@@ -156,7 +165,7 @@ def main(
     seed: int = 0,
     minibatch_size_per_device: Optional[float] = None,
     train_with_dropout: bool = False,
-    results_folder: str = "./results",
+    results_folder: str = "./result_cosqa_re-kl_0",
     linear_probe: bool = False,
     lr_schedule: str = "cosine_anneal",
     # Note: you can pass either weak_model_size or weak_labels_path. If you pass
@@ -217,16 +226,14 @@ def main(
     if weak_model_size is not None:
         weak_model_config = config.copy()
         weak_model_config["model_size"] = weak_model_size
-        weak_model_config["loss"] = "xent"
+        weak_model_config["loss"] = loss
         if use_default_lr:
             weak_model_config["lr"] = MODELS_DICT[weak_model_size].default_lr
 
         weak_model_config_name = get_config_foldername(weak_model_config)
-
-        weak_labels_path = (
-            results_folder + "/" + sweep_subfolder + "/" + weak_model_config_name + "/weak_labels"
-        )
-
+        weak_labels_path = os.path.join(results_folder, sweep_subfolder, weak_model_config_name, "weak_labels")
+           
+    
     eval_batch_size = model_config.eval_batch_size
     random.seed(seed)
 
@@ -244,6 +251,7 @@ def main(
     else:
         if not weak_labels_path.endswith("weak_labels"):
             weak_labels_path = weak_labels_path + "/weak_labels"
+            
         if sync_command is not None:
             sync_command_list = sync_command.split(" ")
             sync_command_list.extend(
@@ -254,6 +262,7 @@ def main(
             if result.returncode != 0:
                 raise RuntimeError(f"Sync command failed with return code {result.returncode}")
         train1_ds = load_from_disk(weak_labels_path)
+        print("Successfully load from disk.")
         train2_ds = None
 
         weak_model_config = json.load(open(weak_labels_path.replace("weak_labels", "config.json")))
@@ -276,6 +285,9 @@ def main(
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
 
     loss_fn = loss_dict[loss]
+
+    train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/'))
+
     print(f"Training model model, size {model_size}")
     test_results, weak_ds = train_and_save_model(
         model_config,
