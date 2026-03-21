@@ -77,7 +77,7 @@ def tokenize_dataset(
 def hf_loader(*hf_name, split_names=None):
     if split_names is None:
         split_names = dict()
-    return lambda split: hf_load_dataset(*hf_name, split=split_names.get(split, split))
+    return lambda split: hf_load_dataset(*hf_name, split=split_names.get(split, split), trust_remote_code=True)
 
 
 ##########
