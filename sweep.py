@@ -42,4 +42,4 @@ def main(model_sizes: Union[List[str], str], **kwargs):
 
 if __name__ == "__main__":
     fire.Fire(main)
-    #python sweep.py --model_sizes=gpt2,gpt2-medium,gpt2-large --seed=0 --ds_name=cosmos_qa
+    #python sweep.py --model_sizes=gpt2,gpt2-medium,gpt2-large --seed=0 --loss=conf_induc --results_folder=result_conf_induc_0

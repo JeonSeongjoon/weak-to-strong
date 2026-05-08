@@ -18,7 +18,8 @@ from weak_to_strong.loss import (logconf_loss_fn,
     xent_loss, 
     reverse_kl_loss, 
     reverse_ce_loss, 
-    reverse_logconf_loss_fn
+    reverse_logconf_loss_fn,
+    conf_induc_loss
     )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
@@ -125,7 +126,8 @@ loss_dict = {
     "xent": xent_loss(),
     "re-kl": reverse_kl_loss(), 
     "re-ce": reverse_ce_loss(), 
-    "re-logconf": reverse_logconf_loss_fn()
+    "re-logconf": reverse_logconf_loss_fn(),
+    "conf_induc": conf_induc_loss()
 }
 
 VALID_LOSSES: List[str] = list(loss_dict.keys())
@@ -160,12 +162,12 @@ def main(
     model_size: str = "gpt2",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
-    epochs: int = 2,
+    epochs: int = 3,
     force_retrain: bool = False,
     seed: int = 0,
     minibatch_size_per_device: Optional[float] = None,
     train_with_dropout: bool = False,
-    results_folder: str = "./result_cosqa_re-kl_0",
+    results_folder: str = "./result",
     linear_probe: bool = False,
     lr_schedule: str = "cosine_anneal",
     # Note: you can pass either weak_model_size or weak_labels_path. If you pass
