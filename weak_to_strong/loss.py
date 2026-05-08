@@ -1,4 +1,6 @@
 import torch
+import numpy as np
+import rpt
 
 
 class LossFnBase:
@@ -104,6 +106,7 @@ class logconf_loss_fn(LossFnBase):
             dim=1,
         )
         target = labels * (1 - coef) + strong_preds.detach() * coef
+
         loss = torch.nn.functional.cross_entropy(logits, target, reduction="none")
         return loss.mean()
 
@@ -190,4 +193,130 @@ class reverse_logconf_loss_fn(LossFnBase):
         # CE → Reverse CE 로 교체: weight가 p_weak → p_strong
         log_target = torch.log(target.clamp(min=1e-8))
         loss = -(preds * log_target).sum(dim=-1)
+        return loss.mean()
+    
+
+
+#New confidence induction loss prototype
+class conf_induc_loss_proto(LossFnBase):
+    '''
+    L(x) = CE( f(x), (1-g(x)) * f_w(x) + g(x) * f_t(x) )
+
+    [Question]
+    Should we use each distribution as a hard-label form?
+
+    '''
+    def __init__(
+        self,
+        warmup_frac: float = 0.1,
+    ):
+        self.warmup_frac = warmup_frac
+
+    def __call__(
+        self,
+        logits: torch.Tensor, # train되는 모델의 logit
+        labels: torch.Tensor, # ground truth or weak label (soft label)
+        step_frac: float
+    ):
+        logits = logits.float()
+        labels = labels.float()
+        
+        if step_frac < self.warmup_frac:
+            return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
+
+
+        # single change point detection
+        conf = labels.max(dim=-1).values
+        conf_np = conf.detach().cpu().numpy()
+        sorted_scores = np.sort(conf_np)
+
+        try:
+            algo = rpt.Binseg(model="l2").fit(sorted_scores)
+            breakpoint_idx = algo.predict(n_bkps=1)[0]
+            threshold = float(sorted_scores[breakpoint_idx])
+            # single change point detection method 사용 (논문의 방식과 동일)
+            # threshold를 기준으로 weak model의 confidence가 낮으면 hard 높으면 easy or overlap이다.
+        except Exception:
+            threshold = float(np.median(conf_np))
+
+
+        coef = (conf >= threshold).float().unsqueeze(-1)
+        # binary classification task이기 때문에 soft label의 형태는 [#sample, 2]이다. 
+
+        strong_preds = torch.softmax(logits, dim=-1).detach()
+        # hard-label ver.
+        #
+        #
+
+        target = coef * labels + (1.0 - coef) * strong_preds
+        loss = torch.nn.functional.cross_entropy(logits, target, reduction = 'none')
+        return loss.mean()
+
+
+# Final version
+class conf_induc_loss(LossFnBase):
+    def __init__(
+        self,
+        warmup_frac: float = 0.1,
+        update_every: int = 50,
+        ema_alpha: float = 0.9,
+    ):
+        self.warmup_frac = warmup_frac
+        self.update_every = update_every
+        self.ema_alpha = ema_alpha
+        self.threshold = None     # EMA-smoothed threshold (실제 사용)
+        self._step_count = 0
+        self._conf_buffer = []
+
+    def __call__(self, logits, labels, step_frac):
+        logits = logits.float()
+        labels = labels.float()
+
+        if step_frac < self.warmup_frac:
+            return torch.nn.functional.cross_entropy(
+                logits, labels, reduction='none'
+            ).mean()
+
+        conf = labels.max(dim=-1).values
+
+        # ── 매 step confidence buffer에 누적 ──
+        self._conf_buffer.append(conf.detach().cpu().numpy())
+        self._step_count += 1
+
+        # ── update 주기마다: 누적 데이터로 binseg → EMA로 smoothing ──
+        if self._step_count % self.update_every == 0:
+            all_conf = np.concatenate(self._conf_buffer)
+            sorted_scores = np.sort(all_conf)
+            try:
+                algo = rpt.Binseg(model="l2").fit(sorted_scores)
+                breakpoint_idx = algo.predict(n_bkps=1)[0]
+                threshold_now = float(sorted_scores[breakpoint_idx])
+            except Exception:
+                threshold_now = float(np.median(all_conf))
+
+            # EMA 갱신
+            if self.threshold is None:
+                self.threshold = threshold_now      # 첫 갱신은 그대로
+            else:
+                self.threshold = (
+                    self.ema_alpha * self.threshold
+                    + (1 - self.ema_alpha) * threshold_now
+                )
+
+            self._conf_buffer = []   # buffer 비우기
+
+        # 첫 update 전이면 weak label만 사용
+        if self.threshold is None:
+            return torch.nn.functional.cross_entropy(
+                logits, labels, reduction='none'
+            ).mean()
+
+        coef = (conf >= self.threshold).float().unsqueeze(-1)
+        strong_preds = torch.softmax(logits, dim=-1).detach()
+        
+        target = coef * labels + (1.0 - coef) * strong_preds
+        loss = torch.nn.functional.cross_entropy(
+            logits, target, reduction='none'
+        )
+        
         return loss.mean()

@@ -103,9 +103,9 @@ def train_model(
             logger.logkv("eval_accuracy", eval_accs)
         all_logits = []
         all_labels = []
-        for i in range(batch_size // minibatch_size):
+        for i in range(batch_size // minibatch_size): # 단일 batch 내의 minibatch 수만큼 반복
             try:
-                mbatch = [next(it) for _ in range(minibatch_size)]
+                mbatch = [next(it) for _ in range(minibatch_size)] #
             except StopIteration:
                 break
             input_ids = (
@@ -116,7 +116,7 @@ def train_model(
                 )
                 .to(io_device)
             )
-            labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device)
+            labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device) # minibatch label set (soft label)
 
             logits = model(input_ids)
 
