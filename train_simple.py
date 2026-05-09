@@ -228,7 +228,7 @@ def main(
     if weak_model_size is not None:
         weak_model_config = config.copy()
         weak_model_config["model_size"] = weak_model_size
-        weak_model_config["loss"] = loss
+        weak_model_config["loss"] = "xent"                  # it is revised from <loss> to <"xent">
         if use_default_lr:
             weak_model_config["lr"] = MODELS_DICT[weak_model_size].default_lr
 

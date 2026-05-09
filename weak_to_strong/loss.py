@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-import rpt
+import ruptures as rpt
 
 
 class LossFnBase:
