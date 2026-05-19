@@ -74,7 +74,9 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=True,
+        model_parallel=False,                  
+        # I set the model_parallel flag false for Colab environment
+        # If you run this code in another environment, you have to set it True
         # note: you will probably not be able to run this without many gpus
         custom_kwargs={
             "trust_remote_code": True,
