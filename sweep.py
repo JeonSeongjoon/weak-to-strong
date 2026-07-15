@@ -39,4 +39,11 @@ def main(model_sizes: Union[List[str], str], **kwargs):
 
 if __name__ == "__main__":
     fire.Fire(main)
-    #python sweep.py --model_sizes=gpt2,gpt2-medium,gpt2-large --seed=0 --loss=induc_conf --results_folder=./result_conf_induc_0
+    
+    
+#python sweep.py --model_sizes=gpt2,gpt2-medium,gpt2-large --seed=0 --loss=conf_induc --results_folder=./result_conf_induc_0
+
+#[ LAB ver. ] -> tmux attach -t train
+#CUDA_VISIBLE_DEVICES= python sweep.py --model_sizes=[gpt2-large,gpt2-xl,Qwen/Qwen-1_8B] --seed=0 --loss=conf_induc --results_folder=./cosq_mid_ci_0 --epochs=2 --ds_name=cosmos_qa
+#CUDA_VISIBLE_DEVICES=0,1 python sweep.py --model_sizes=gpt2-large,gpt2-xl,Qwen/Qwen-1_8B --seed=0 --loss=conf_induc --results_folder=./train_results/cosq_mid_conf_induc_0  
+

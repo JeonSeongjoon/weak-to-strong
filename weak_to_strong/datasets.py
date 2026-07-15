@@ -43,7 +43,7 @@ def load_dataset(ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None
         )
         ds = ds.shuffle(seed=seed)  # shuffling a bit pointless for test set but wtv
         results[split] = ds
-    return results
+    return results   # dict("train" : trainset, "test" : testset)
 
 
 def tokenize_dataset(
@@ -80,19 +80,13 @@ def hf_loader(*hf_name, split_names=None):
     return lambda split: hf_load_dataset(*hf_name, split=split_names.get(split, split), trust_remote_code=True)
 
 
-##########
-# ACTUAL DATASETS
-##########
+#####################
+#  ACTUAL DATASETS  #
+#####################
 
 
 def format_amazon_polarity(ex, rng):
     return dict(txt=f"{ex['title']} {ex['content']}", hard_label=ex["label"])
-
-
-register_dataset(
-    "amazon_polarity",
-    DatasetConfig(loader=hf_loader("amazon_polarity"), formatter=format_amazon_polarity),
-)
 
 
 def format_sciq(ex, rng):
@@ -105,22 +99,10 @@ def format_sciq(ex, rng):
     return dict(txt=txt, hard_label=hard_label)
 
 
-register_dataset(
-    "sciq",
-    DatasetConfig(loader=hf_loader("sciq"), formatter=format_sciq),
-)
-
-
 def format_anthropic_hh(ex, rng):
     hard_label = int(rng.random() < 0.5)
     txt = ex["chosen"] if hard_label else ex["rejected"]
     return dict(txt=txt, hard_label=hard_label)
-
-
-register_dataset(
-    "anthropic_hh",
-    DatasetConfig(loader=hf_loader("Anthropic/hh-rlhf"), formatter=format_anthropic_hh),
-)
 
 
 def format_cosmosqa(ex, rng):
@@ -139,30 +121,45 @@ def format_cosmosqa(ex, rng):
     return dict(txt=txt, hard_label=hard_label)
 
 
-register_dataset(
-    "cosmos_qa",
-    DatasetConfig(
-        loader=hf_loader("cosmos_qa", split_names=dict(test="validation")),
-        formatter=format_cosmosqa,
-    ),
-)
-
-
 def format_boolq(ex, rng):
     hard_label = int(ex["answer"])
     txt = f"Passage: {ex['passage']}\nQuestion: {ex['question']}"
     return dict(txt=txt, hard_label=hard_label)
 
 
+
+register_dataset(
+    "amazon_polarity",
+    DatasetConfig(loader=hf_loader("amazon_polarity"), formatter=format_amazon_polarity),
+)
+
+register_dataset(
+    "sciq",
+    DatasetConfig(loader=hf_loader("sciq"), formatter=format_sciq),
+)
+
+register_dataset(
+    "anthropic_hh",
+    DatasetConfig(loader=hf_loader("Anthropic/hh-rlhf"), formatter=format_anthropic_hh),
+)
+
+register_dataset(
+    "cosmos_qa",
+    DatasetConfig(
+        loader=hf_loader("cosmos_qa", split_names=dict(test="validation")), formatter=format_cosmosqa),
+)
+
 register_dataset(
     "boolq",
     DatasetConfig(
-        loader=hf_loader("boolq", split_names=dict(test="validation")), formatter=format_boolq
-    ),
+        loader=hf_loader("boolq", split_names=dict(test="validation")), formatter=format_boolq),
 )
 
 
 VALID_DATASETS: list[str] = list(_REGISTRY.keys())
+
+
+
 
 """
 from datasets import disable_caching

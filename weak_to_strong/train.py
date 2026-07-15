@@ -184,6 +184,7 @@ def train_and_save_model(
     lr_schedule: str = "constant",
     optimizer_name: str = "adam",
     eval_every: Optional[int] = None,
+    weak_model_size: Optional[str] = None,
 ):
     if eval_batch_size is None:
         eval_batch_size = batch_size
@@ -217,10 +218,13 @@ def train_and_save_model(
     # Load the model
     if model_config.model_parallel:
         assert torch.cuda.device_count() > 1, f"you might want more gpus for {model_config.name}"
+        ngpus = torch.cuda.device_count()
+        max_memory = {i:"20GiB" for i in range(ngpus)}
         model = TransformerWithHead.from_pretrained(
             model_config.name,
             num_labels=2,
             device_map="auto",
+            max_memory=max_memory,
             linear_probe=linear_probe,
             **custom_kwargs,
         )
@@ -268,7 +272,8 @@ def train_and_save_model(
             optimizer_name=optimizer_name,
         )
         print("Model training took", time.time() - start, "seconds")
-        if save_path:
+        
+        if save_path and weak_model_size == None:  
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
             (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
                 save_path,

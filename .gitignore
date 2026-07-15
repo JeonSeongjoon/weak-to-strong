@@ -2,4 +2,6 @@ dump
 *.pyc
 *.swp
 *.swo
-results/
+train_results/
+tables/
+figures/

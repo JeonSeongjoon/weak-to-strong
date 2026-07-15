@@ -39,6 +39,9 @@ MODEL_CONFIGS = [
         name="gpt2-large",
         default_lr=1e-5,
         eval_batch_size=32,
+        model_parallel=(                     
+            torch.cuda.device_count() > 1
+        ),
     ),
     ModelConfig(
         name="gpt2-xl",
@@ -49,8 +52,8 @@ MODEL_CONFIGS = [
         # but if you have multiple it won't run without model_parallel because of the overhead of data
         # parallel training).
         model_parallel=(
-            torch.cuda.get_device_properties(0).total_memory < 35e9
-            and torch.cuda.device_count() > 1
+            #torch.cuda.get_device_properties(0).total_memory < 50e9 and 
+            torch.cuda.device_count() > 1
         ),
     ),
     ModelConfig(
@@ -59,8 +62,8 @@ MODEL_CONFIGS = [
         eval_batch_size=2,
         gradient_checkpointing=True,
         model_parallel=(
-            torch.cuda.get_device_properties(0).total_memory < 35e9
-            and torch.cuda.device_count() > 1
+            #torch.cuda.get_device_properties(0).total_memory < 50e9 and
+            torch.cuda.device_count() > 1
         ),
         custom_kwargs={
             "trust_remote_code": True,
@@ -74,7 +77,7 @@ MODEL_CONFIGS = [
         default_lr=1e-5,
         eval_batch_size=2,
         gradient_checkpointing=True,
-        model_parallel=False,                  
+        model_parallel=True,                  
         # I set the model_parallel flag false for Colab environment
         # If you run this code in another environment, you have to set it True
         # note: you will probably not be able to run this without many gpus
@@ -157,14 +160,14 @@ def get_config_foldername(config: dict) -> str:
 def main(
     batch_size: int = 32,
     max_ctx: int = 1024,
-    ds_name: str = "sciq",
+    ds_name: str = "cosmos_qa",
     loss: str = "xent",
     n_docs: int = 20000,
     n_test_docs: int = 10000,
     model_size: str = "gpt2",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
-    epochs: int = 3,
+    epochs: int = 2,
     force_retrain: bool = False,
     seed: int = 0,
     minibatch_size_per_device: Optional[float] = None,
@@ -218,7 +221,7 @@ def main(
         "epochs": epochs,
         # "force_retrain": force_retrain,
         "seed": seed,
-        # "minibatch_size_per_device": minibatch_size_per_device,
+        "minibatch_size_per_device": minibatch_size_per_device,
         "train_with_dropout": train_with_dropout,
         # "results_folder": results_folder,
         "linear_probe": linear_probe,
@@ -245,12 +248,12 @@ def main(
     dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs, test=n_test_docs))
 
     # Split the training dataset in half
-    train_dataset, test_ds = dataset["train"], dataset["test"]
+    train_dataset, test_ds = dataset["train"], dataset["test"]                 # train set + test set, validation set
 
     if weak_labels_path is None:
-        split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)
-        train1_ds, train2_ds = split_data["train"], split_data["test"]
-        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))
+        split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)       # train set : 10000
+        train1_ds, train2_ds = split_data["train"], split_data["test"]              # validation set : 10000
+        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))       # test set : 10000
         config_name = get_config_foldername(config)
     else:
         if not weak_labels_path.endswith("weak_labels"):
@@ -265,6 +268,7 @@ def main(
             result = subprocess.run(sync_command_list, check=True)
             if result.returncode != 0:
                 raise RuntimeError(f"Sync command failed with return code {result.returncode}")
+        
         train1_ds = load_from_disk(weak_labels_path)
         print("Successfully load from disk.")
         train2_ds = None
@@ -290,7 +294,7 @@ def main(
 
     loss_fn = loss_dict[loss]
 
-    train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/'))
+    train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/')) #
 
     print(f"Training model model, size {model_size}")
     test_results, weak_ds = train_and_save_model(
@@ -311,6 +315,7 @@ def main(
         lr_schedule=lr_schedule,
         optimizer_name=optim,
         eval_every=eval_every,
+        weak_model_size=weak_model_size,
     )
 
     if weak_ds is not None:
