@@ -2,12 +2,15 @@ import json
 import os
 import random
 import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import fire
 import numpy as np
 import torch
 from datasets import load_dataset, load_from_disk
+from transformers import TrainingArguments
+
 
 import weak_to_strong.logger as logger
 from weak_to_strong.common import get_tokenizer
@@ -22,6 +25,13 @@ from weak_to_strong.loss import (logconf_loss_fn,
     conf_induc_loss
     )
 from weak_to_strong.train import ModelConfig, train_and_save_model
+
+from datacentric.sft import load_model_and_save_activations
+from datacentric.sft_config import SFTConfig
+from datacentric.probe import ProbeConfig, LogisticProbeConfig
+
+
+
 
 # NOTE learning rates are not particularly tuned, work somewhat reasonably at train batch size 32
 MODEL_CONFIGS = [
@@ -172,7 +182,7 @@ def main(
     seed: int = 0,
     minibatch_size_per_device: Optional[float] = None,
     train_with_dropout: bool = False,
-    results_folder: str = "./result",
+    results_folder: str = "./results",
     linear_probe: bool = False,
     lr_schedule: str = "cosine_anneal",
     # Note: you can pass either weak_model_size or weak_labels_path. If you pass
@@ -285,17 +295,19 @@ def main(
         sweep_subfolder=sweep_subfolder,
         config_name=config_name,
     )
+    
     # Tokenize datasets
     tokenizer = get_tokenizer(model_config.name)
     train1_ds = tokenize_dataset(train1_ds, tokenizer, max_ctx)
     test_ds = tokenize_dataset(test_ds, tokenizer, max_ctx)
     if train2_ds:
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
+    train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/')) 
 
     loss_fn = loss_dict[loss]
 
-    train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/')) #
-
+    
+    # Train and evaluation
     print(f"Training model model, size {model_size}")
     test_results, weak_ds = train_and_save_model(
         model_config,
@@ -318,6 +330,7 @@ def main(
         weak_model_size=weak_model_size,
     )
 
+    # Results
     if weak_ds is not None:
         save_path_wl = save_path + "/" + "weak_labels"
         weak_ds.save_to_disk(save_path_wl)
@@ -346,6 +359,86 @@ def main(
                 raise RuntimeError(f"Sync command failed with return code {result.returncode}")
         except Exception as e:
             raise RuntimeError("Failed to sync results to remote storage.") from e
+
+
+    ###############################
+    # Step3 : Caching activations #
+    ###############################
+    
+    # 
+    #
+    #
+
+    if weak_model_size == None:
+
+        cfg = SFTConfig(
+            dataset=ds_name,
+            n_train=len(train1_ds),             
+            n_val=0,                          #        
+            n_test=len(test_ds),
+            n_predict=0,
+            minibatch_size=1,
+            batch_size=32,
+            results_folder="../../results",   # results_folder 수정 필요
+            seed=seed,                        # seed값을 적절히 입력해야함.
+            disable_lora=True,
+            strong_only=True,
+            probe=LogisticProbeConfig(),
+            run_name=f"{ds_name}_{seed}",
+        )
+
+        train_args: dict = dict(
+            num_train_epochs=cfg.n_epochs,
+            adam_beta2=0.95,
+            gradient_accumulation_steps=cfg.batch_size // cfg.minibatch_size,
+            eval_strategy="steps",
+            label_names=["labels"],
+            load_best_model_at_end=cfg.load_best_model_at_end,
+            logging_steps=25,
+            metric_for_best_model=cfg.metric_for_best_model,
+            greater_is_better=cfg.greater_is_better,
+            per_device_train_batch_size=cfg.minibatch_size,
+            per_device_eval_batch_size=cfg.minibatch_size,
+            save_strategy="steps",
+            save_total_limit=cfg.save_total_limit,
+            tf32=True,  # Use Tensor Cores even for fp32 matmuls
+            warmup_steps=cfg.n_warmup_steps,
+            weight_decay=cfg.weight_decay,
+            lr_scheduler_type=cfg.lr_schedule,
+            eval_steps=cfg.eval_every,
+        )
+
+        def get_model_and_run_name(model_name, current_name):
+            model_last = model_name.split("/")[-1]
+            model_cfg = ModelConfig(name=model_name, enable_lora=not cfg.disable_lora)
+            run_name = f"{current_name}-{cfg.run_name}-{cfg.dataset}-{model_last}"
+            return model_cfg, run_name
+
+        shared_root = Path(cfg.results_folder) / "dcl"
+        cfg_name = f"{cfg.run_name}_{cfg.weak_model_name.split('/')[-1]}_{cfg.strong_model_name.split('/')[-1]}"
+
+        # train weak floor, get predictions
+        print("\n\033[32m===== Training w2s model =====\033[0m")
+        model_cfg, weak_run_name = get_model_and_run_name(cfg.weak_model_name, "weak")
+        train_args["run_name"] = weak_run_name
+        train_args["output_dir"] = str(shared_root / cfg_name / "output")
+        train_args["learning_rate"] = cfg.weak_lr
+
+
+        act_ds_dict = {
+            "train" : train2_ds,                 # Already tokenized above
+            "test" : test_ds,
+        }
+
+        acts_dir = "./activations"
+        acts_dir.mkdirs(parent=True, exist_ok = True)
+        
+        load_model_and_save_activations(
+            ds_dict = act_ds_dict,
+            model_cfg = model_cfg,
+            train_args = TrainingArguments(**train_args),
+            acts_dir = acts_dir
+        )
 
 
 if __name__ == "__main__":
