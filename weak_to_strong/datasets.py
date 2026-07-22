@@ -37,13 +37,16 @@ def load_dataset(ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None
             ds = ds.select(range(n_docs))
         except IndexError as e:
             print(f"Warning {ds_name} has less than {n_docs} docs, using all: {e}")
-        ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))
+        ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  
+        ds = ds.map(lambda ex, idx: {"idx": idx}, with_indices=True)
         ds = ds.map(
             lambda ex: {"soft_label": [1 - float(ex["hard_label"]), float(ex["hard_label"])]}
         )
         ds = ds.shuffle(seed=seed)  # shuffling a bit pointless for test set but wtv
         results[split] = ds
-    return results   # dict("train" : trainset, "test" : testset)
+    return results   
+    # results => dict("train" : trainset, "test" : testset)
+    # ds => {"txt", "hard_label", "soft_label", "idx"}
 
 
 def tokenize_dataset(

@@ -556,11 +556,9 @@ def load_model_and_save_activations(
     tokenizer = init_tokenizer(model_cfg)
     model = None
 
-    def process(examples):
-        out = tokenizer(examples["txt"], truncation=True)
-        return out
-
-    ds_dict = ds_dict.map(process, batched=True)
+    #def process(examples):
+    #   return tokenizer(examples["txt"], truncation=True)
+    #ds_dict = ds_dict.map(process, batched=True)
 
 
     if acts_dir.exists() and all((acts_dir / f"{name}.pt").exists() for name in ds_dict.keys()):

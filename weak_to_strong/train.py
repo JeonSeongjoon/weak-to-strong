@@ -2,11 +2,13 @@ import itertools
 import os
 import pickle
 import time
+import json
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 import datasets
 import numpy as np
+import pandas as pd
 import torch
 import torch_optimizer as toptim
 from transformers.modeling_utils import load_sharded_checkpoint
@@ -44,7 +46,7 @@ def train_model(
     train_with_dropout: bool = False,
     epochs: int = 1,
     lr_schedule: str = "cosine_anneal",
-    optimizer_name: str = "adam",
+    optimizer_name: str = "adam"
 ):
     print("LR", lr, "batch_size", batch_size, "minibatch_size", minibatch_size)
     assert batch_size % minibatch_size == 0, "batch size must be divisible by minibatch size"
@@ -54,6 +56,7 @@ def train_model(
         model.train()
     else:
         model.eval()
+        
     if gradient_checkpointing:
         (
             model if hasattr(model, "gradient_checkpointing_enable") else model.module
@@ -73,14 +76,23 @@ def train_model(
         optimizer = toptim.Adafactor(model.parameters(), lr=lr)
     else:
         assert False, f"invalid optimizer {optimizer_name}, must be adam or adafactor"
+
     if lr_schedule == "cosine_anneal":
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, nsteps)
     else:
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule_fn)
+
     step = 0
     it = itertools.chain.from_iterable(itertools.repeat(ds, epochs))
     losses = []
     accuracies = []
+    thresholds = {}                       # Dictionary that has a thresholds value for each step     
+    sample_info = {                       # Dictionary that has sample info for each sample
+        "idx" : [],
+        "difficulty" : [],
+        "confidence" : []
+    }
+    # used for comparing results of true classification and loss classification
     eval_acc_dict = {}
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
@@ -90,6 +102,7 @@ def train_model(
 
     while step < nsteps:
         loss_tot = 0
+
         if eval_every and (step + 1) % eval_every == 0:
             eval_results = eval_model_acc(model, eval_ds, eval_batch_size)
             if gradient_checkpointing:
@@ -101,13 +114,17 @@ def train_model(
             eval_accs = np.mean([r["acc"] for r in eval_results])
             eval_acc_dict[step] = eval_accs
             logger.logkv("eval_accuracy", eval_accs)
+
         all_logits = []
         all_labels = []
-        for i in range(batch_size // minibatch_size): # 단일 batch 내의 minibatch 수만큼 반복
+        all_idxs = []
+
+        for i in range(batch_size // minibatch_size):    # 단일 batch 내의 minibatch 수만큼 반복
             try:
-                mbatch = [next(it) for _ in range(minibatch_size)] #
+                mbatch = [next(it) for _ in range(minibatch_size)] 
             except StopIteration:
                 break
+
             input_ids = (
                 torch.nn.utils.rnn.pad_sequence([torch.tensor(ex["input_ids"]) for ex in mbatch])
                 .transpose(
@@ -116,18 +133,37 @@ def train_model(
                 )
                 .to(io_device)
             )
-            labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device) # minibatch label set (soft label)
 
+            labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device)   # minibatch label set (soft label)
             logits = model(input_ids)
 
             all_logits.extend(logits.to(io_device))
             all_labels.extend(labels)
+            all_idxs.extend([ex["idx"] for ex in mbatch])
+
         all_logits = torch.stack(all_logits)
         all_labels = torch.stack(all_labels)
-        loss = loss_fn(all_logits, all_labels, step_frac=step / nsteps)
+
+        loss = loss_fn(
+            all_logits, 
+            all_labels, 
+            step_frac=step/nsteps, 
+        )
         loss_tot += loss.item()
         loss.backward()
         losses.append(loss_tot)
+
+        thresholds[f"step{step}"] = loss_fn.threshold
+        sample_es_or_olp = loss_fn.easy 
+        sample_conf = loss_fn.conf
+        
+        for i in range(len(all_idxs)):
+            diff_val = sample_es_or_olp[i]
+            sample_info["idx"].append(all_idxs[i])
+            sample_info["difficulty"].append(diff_val.item() if hasattr(diff_val, "item") else diff_val)
+            sample_info["confidence"].append(sample_conf[i].item())
+
+
         accuracies.append(
             torch.mean(
                 (torch.argmax(all_logits, dim=1) == torch.argmax(all_labels, dim=1)).to(
@@ -153,15 +189,18 @@ def train_model(
             )
             losses = []
             accuracies = []
+
         step += 1
         logger.dumpkvs()
+
     final_eval_results = None
     if eval_every:
         print("Final evaluation:")
         final_eval_results = eval_model_acc(model, eval_ds, eval_batch_size)
         logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
         logger.dumpkvs()
-    return final_eval_results
+
+    return final_eval_results, sample_info, thresholds
 
 
 def train_and_save_model(
@@ -185,6 +224,7 @@ def train_and_save_model(
     optimizer_name: str = "adam",
     eval_every: Optional[int] = None,
     weak_model_size: Optional[str] = None,
+    shared_info_file_dir: str
 ):
     if eval_batch_size is None:
         eval_batch_size = batch_size
@@ -255,7 +295,7 @@ def train_and_save_model(
         test_results = eval_model_acc(model, test_ds, eval_batch_size)
     else:
         start = time.time()
-        test_results = train_model(
+        test_results, sample_info, thresholds = train_model(
             model,
             train_ds,
             batch_size,
@@ -269,7 +309,7 @@ def train_and_save_model(
             minibatch_size=minibatch_size,
             train_with_dropout=train_with_dropout,
             lr_schedule=lr_schedule,
-            optimizer_name=optimizer_name,
+            optimizer_name=optimizer_name
         )
         print("Model training took", time.time() - start, "seconds")
         
@@ -280,6 +320,14 @@ def train_and_save_model(
                 safe_serialization=False
             )
             print("saved", save_path)
+
+        if os.path.exists(shared_info_file_dir):
+            # Save sample info as pandas?
+            pd.DataFrame(sample_info).to_csv(os.path.join(shared_info_file_dir, 'sample_info.csv'), index=False)
+            
+            # Save thresholds dict as jsonl
+            with open(os.path.join(shared_info_file_dir, f"thresholds.json"), "w") as f:
+                json.dump(thresholds, f, indent=2)
 
     inference_results = None
     if inference_ds:
