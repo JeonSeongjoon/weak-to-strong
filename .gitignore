@@ -3,4 +3,4 @@ dump
 *.swp
 *.swo
 results/
-
+activations/

@@ -23,15 +23,118 @@ from weak_to_strong.loss import (logconf_loss_fn,
     xent_loss, 
     conf_induc_loss
 )
-from weak_to_strong.train import train_and_save_model
-from weak_to_strong.model import MODELS_DICT
+from weak_to_strong.train import ModelConfig, train_and_save_model
 
-from datacentric.sft import load_model_and_save_activations
+
+from datacentric.sft import load_model_and_save_activations, load_activations
 from datacentric.sft_config import SFTConfig
 from datacentric.probe import ProbeConfig, LogisticProbeConfig
 from datacentric.model import ModelConfig as DLModelConfig
 from datacentric.probe import PROBES
 
+
+# NOTE learning rates are not particularly tuned, work somewhat reasonably at train batch size 32
+MODEL_CONFIGS = [
+    ModelConfig(
+        name="gpt2",
+        default_lr=5e-5,
+        eval_batch_size=32,
+    ),
+    ModelConfig(
+        name="gpt2-medium",
+        default_lr=5e-5,
+        eval_batch_size=32,
+    ),
+    ModelConfig(
+        name="gpt2-large",
+        default_lr=1e-5,
+        eval_batch_size=32,
+        model_parallel=(                     
+            torch.cuda.device_count() > 1
+        ),
+    ),
+    ModelConfig(
+        name="gpt2-xl",
+        default_lr=1e-5,
+        eval_batch_size=2,
+        gradient_checkpointing=True,
+        # Should use model_parallel on V100s (note: ironically if you have a single V100 it should run,
+        # but if you have multiple it won't run without model_parallel because of the overhead of data
+        # parallel training).
+        model_parallel=(
+            #torch.cuda.get_device_properties(0).total_memory < 50e9 and 
+            torch.cuda.device_count() > 1
+        ),
+    ),
+    ModelConfig(
+        name="Qwen/Qwen-1_8B",
+        default_lr=1e-5,
+        eval_batch_size=2,
+        gradient_checkpointing=True,
+        model_parallel=(
+            #torch.cuda.get_device_properties(0).total_memory < 50e9 and
+            torch.cuda.device_count() > 1
+        ),
+        custom_kwargs={
+            "trust_remote_code": True,
+            "bf16": torch.cuda.is_bf16_supported(),
+            "fp32": not torch.cuda.is_bf16_supported(),
+            "revision": "5fde88dff770a7d036847211f5d9d9705f0caa69",
+        },
+    ),
+    ModelConfig(
+        name="Qwen/Qwen-7B",
+        default_lr=1e-5,
+        eval_batch_size=2,
+        gradient_checkpointing=True,
+        model_parallel=True,                  
+        # I set the model_parallel flag false for Colab environment
+        # If you run this code in another environment, you have to set it True
+        # note: you will probably not be able to run this without many gpus
+        custom_kwargs={
+            "trust_remote_code": True,
+            "bf16": torch.cuda.is_bf16_supported(),
+            "fp32": not torch.cuda.is_bf16_supported(),
+            "revision": "d4efd21e866b9cb3466cb65b963933f5e98016d1",
+        },
+    ),
+    ModelConfig(
+        name="Qwen/Qwen-14B",
+        default_lr=1e-5,
+        eval_batch_size=2,
+        gradient_checkpointing=True,
+        model_parallel=True,
+        # note: you will probably not be able to run this bf16 support and without many gpus
+        custom_kwargs={
+            "trust_remote_code": True,
+            "bf16": torch.cuda.is_bf16_supported(),
+            "fp32": not torch.cuda.is_bf16_supported(),
+            "revision": "8be2854218fea9054331e217fd26a06f3fd02004",
+        },
+    ),
+    ModelConfig(
+        name="Qwen/Qwen-72B",
+        default_lr=1e-5,
+        eval_batch_size=1,
+        gradient_checkpointing=True,
+        model_parallel=True,
+        # note: you will probably not be able to run this without bf16 support and many gpus
+        custom_kwargs={
+            "trust_remote_code": True,
+            "bf16": torch.cuda.is_bf16_supported(),
+            "fp32": not torch.cuda.is_bf16_supported(),
+            "revision": "fec78c0e3b3b10dd9f0ce775c34a686a3255a7d1",
+        },
+        # This model is really big, save space by using adafactor.
+        # Note that even then it will take up ~60GB per GPU on an 8-GPU machine.
+        default_optimizer="adafactor",
+    ),
+]
+
+
+MODELS_DICT: Dict[str, ModelConfig] = {
+    model_config.name: model_config for model_config in MODEL_CONFIGS
+}
 
 
 loss_dict = {
@@ -70,7 +173,7 @@ def main(
     loss: str = "xent",
     n_docs: int = 20000,
     n_test_docs: int = 10000,
-    model_size: str = "gpt2",
+    model_size: str = "gpt2-large",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
     epochs: int = 2,
@@ -78,7 +181,7 @@ def main(
     seed: int = 0,
     minibatch_size_per_device: Optional[float] = None,
     train_with_dropout: bool = False,
-    results_folder: str = "./results",
+    results_folder: str = "./weak-to-strong/results",
     linear_probe: bool = False,
     lr_schedule: str = "cosine_anneal",
     # Note: you can pass either weak_model_size or weak_labels_path. If you pass
@@ -114,7 +217,16 @@ def main(
     if optim is None:
         optim = model_config.default_optimizer
 
-    shared_info_file_dir = f"./results/sample_difficulty/wms:{weak_model_size}_ms:{model_size}"
+
+    # File directory name configuration
+    wms_4_file = weak_model_size.replace("/", "") if weak_model_size is not None else weak_model_size
+    ms_4_file = model_size.replace("/", "") if model_size is not None else model_size
+
+    result_dir = "./weak-to-strong/results"
+    shared_info_file_dir = result_dir + f"/sample_difficulty/seed={seed}/wms:{wms_4_file}_ms:{ms_4_file}"
+    if wms_4_file is not None:
+        os.makedirs(shared_info_file_dir, exist_ok=True)
+
 
     # The commented out terms are the ones that should not change final results
     config = {
@@ -136,6 +248,7 @@ def main(
         "linear_probe": linear_probe,
         "lr_schedule": lr_schedule,
         "eval_every": eval_every,
+        "train_mode": "simple"
         # "sweep_subfolder": sweep_subfolder,
     }
 
@@ -208,7 +321,7 @@ def main(
     
     # Train and evaluation
     print(f"Training model model, size {model_size}")
-    test_results, weak_ds = train_and_save_model(
+    test_results, inference_results = train_and_save_model(
         model_config,
         train1_ds,
         test_ds,
@@ -230,23 +343,25 @@ def main(
         shared_info_file_dir=shared_info_file_dir
     )
 
-    # Results
-    if weak_ds is not None:
+    # inference results means weak_ds
+    if inference_results is not None:      
         save_path_wl = save_path + "/" + "weak_labels"
-        weak_ds.save_to_disk(save_path_wl)
-        test_results.save_to_disk(save_path_wl)
+        inference_results.save_to_disk(save_path_wl)
 
-    test_results.save_to_disk(save_path)
+    if test_results is not None:
+        test_results.save_to_disk(save_path)
 
-    acc = np.mean([x["acc"] for x in test_results])
-    res_dict = {"accuracy": acc}
-    print("accuracy:", acc)
+        acc = np.mean([x["acc"] for x in test_results])
+        res_dict = {"accuracy": acc}
+        print("accuracy:", acc)
 
+        with open(os.path.join(save_path, f"results_summary.json"), "w") as f:
+            json.dump(res_dict, f, indent=2)
+    
     with open(os.path.join(save_path, f"config.json"), "w") as f:
         json.dump(config, f, indent=2)
 
-    with open(os.path.join(save_path, f"results_summary.json"), "w") as f:
-        json.dump(res_dict, f, indent=2)
+    print("Files are saved")
 
     if sync_command is not None:
         print("Syncing results to remote storage...")
@@ -265,19 +380,20 @@ def main(
     #                        Activations                        #
     #############################################################
 
-    shared_acts_dir = Path("./activations")
+    shared_acts_dir = Path(f"./weak-to-strong/activations/{ds_name}/n{n_docs}/seed={seed}")
     
     # Caching activations 
     if weak_labels_path is None:
         cfg = SFTConfig(
             dataset=ds_name,
+            model_name = model_size,
             n_train=len(train1_ds),             
             n_val=0,                                  
             n_test=len(test_ds),
             n_predict=0,
             minibatch_size=1,
             batch_size=32,
-            results_folder="../../results",   # results_folder 수정 필요
+            results_folder=shared_acts_dir,   # results_folder 수정 필요
             seed=seed,                        # seed값을 적절히 입력해야함.
             disable_lora=True,
             strong_only=True,
@@ -289,7 +405,7 @@ def main(
             num_train_epochs=cfg.n_epochs,
             adam_beta2=0.95,
             gradient_accumulation_steps=cfg.batch_size // cfg.minibatch_size,
-            eval_strategy="steps",
+            evaluation_strategy="steps",
             label_names=["labels"],
             load_best_model_at_end=cfg.load_best_model_at_end,
             logging_steps=25,
@@ -299,7 +415,7 @@ def main(
             per_device_eval_batch_size=cfg.minibatch_size,
             save_strategy="steps",
             save_total_limit=cfg.save_total_limit,
-            tf32=True,  # Use Tensor Cores even for fp32 matmuls
+            #tf32=False,  # Use Tensor Cores even for fp32 matmuls
             warmup_steps=cfg.n_warmup_steps,
             weight_decay=cfg.weight_decay,
             lr_scheduler_type=cfg.lr_schedule,
@@ -317,22 +433,21 @@ def main(
 
         # train weak floor, get predictions
         print("\n\033[32m===== Training w2s model =====\033[0m")
-        model_cfg, weak_run_name = get_model_and_run_name(cfg.weak_model_name, "weak")
-        train_args["run_name"] = weak_run_name
+        model_cfg, run_name = get_model_and_run_name(cfg.model_name, "weak")
+        train_args["run_name"] = run_name
         train_args["output_dir"] = str(shared_root / cfg_name / "output")
         train_args["learning_rate"] = cfg.weak_lr
 
 
         act_ds_dict = DatasetDict(
             {
-                "train" : test_ds,                 # Already tokenized above
-                "inference" : train2_ds,
+                "probe_train": train1_ds,         # Already tokenized above
+                "target": train2_ds,
             }
         )
         
-        acts_dir = shared_acts_dir / f"ms:{model_size}"
-        acts_dir.mkdir(parents=True, exist_ok=True)
-        
+        acts_dir = shared_acts_dir / f"ms:{ms_4_file}"
+        print("Start caching activation")
         load_model_and_save_activations(
             ds_dict = act_ds_dict,
             model_cfg = model_cfg,
@@ -343,108 +458,117 @@ def main(
 
     # Classifying samples as easy / overlap / hard
     if weak_model_size is not None:
+
         probe_name = "logreg"
         probe_cfg = LogisticProbeConfig()
 
-        # load activations
-        weak_acts_dir = shared_acts_dir / f"ms:{weak_model_size}"
-        strong_acts_dir = shared_acts_dir / f"ms:{model_size}"
+        weak_acts_dir = shared_acts_dir / f"ms:{wms_4_file}"
+        strong_acts_dir = shared_acts_dir / f"ms:{ms_4_file}"
 
-        x_weak_train = torch.load(weak_acts_dir / f"weak_train.pt", map_location="cuda")
-        x_strong_train = torch.load(strong_acts_dir / f"strong_train.pt", map_location="cuda")
-        x_w2s_train_for_pseudolabeling = torch.load(weak_acts_dir / f"strong_train.pt", map_location="cuda")
-        y_weak_train = torch.tensor(test_ds["hard_label"], device="cuda")
+        x_weak_fit, weak_fit_idx = load_activations(weak_acts_dir / "probe_train.pt")
+        x_weak_tgt, weak_tgt_idx = load_activations(weak_acts_dir / "target.pt")
+        x_strong_tgt, strong_tgt_idx = load_activations(strong_acts_dir / "target.pt")
 
-        print(f"Weak acts shape: {x_weak_train.shape}")
-        print(f"Strong acts shape: {x_strong_train.shape}")
-
-        # probing
-        weak_probe = PROBES[probe_name](probe_cfg)
-        weak_probe.fit(x_weak_train, y_weak_train)
-        y_w2s_train_for_pseudolabeling = weak_probe.predict(x_w2s_train_for_pseudolabeling)
-
-
-        # detaching for not influencing the original values
-        y_w2s_train_for_pseudolabeling = y_w2s_train_for_pseudolabeling.cpu().detach().numpy()
-        y_w2s_train_for_pseudolabeling_indices = np.arange(
-            len(y_w2s_train_for_pseudolabeling)
-        ).reshape(-1,1)
-        y_w2s_train_psdo_tb = np.hstack([
-            y_w2s_train_for_pseudolabeling_indices,
-            y_w2s_train_for_pseudolabeling.copy().reshape(-1,1)
-            ]
-        )
-        
-        x_strong_train = x_strong_train.cpu().detach().numpy()
-        x_strong_train_indices = np.arange(len(x_strong_train)).reshape(-1,1)
-        x_strong_train_tb = np.hstack([
-            x_strong_train_indices, 
-            x_strong_train.copy()
-            ]
-        )
-        
-
-        # Perform change point detection
-        confidence_w2s_train = 2*np.abs(y_w2s_train_psdo_tb[:, 1] - 0.5)
-        y_w2s_train_psdo_tb[:, 1] = confidence_w2s_train
-        y_w2s_train_psdo_tb = y_w2s_train_psdo_tb[y_w2s_train_psdo_tb[:, 1].argsort()]  #np.sort(confidence_w2s_train)
-        sorted_confidence = y_w2s_train_psdo_tb[:, 1].copy()
-        
-        model = Binseg(model="l2").fit(sorted_confidence.reshape(-1, 1))
-        change_points = model.predict(n_bkps=1)[0]
-        
-        # Use the detected change point as the threshold
-        confidence_threshold = sorted_confidence[change_points]
-        low_confidence_indices = np.where(confidence_w2s_train <= confidence_threshold)[0]
-        high_confidence_indices = np.where(confidence_w2s_train > confidence_threshold)[0]
-
-
-        x_w2s_train_hard_tb = x_strong_train_tb[low_confidence_indices, :]              # (N x M)
-        x_w2s_train_easy_or_overlap_tb = x_strong_train_tb[high_confidence_indices, :]  # (N x M)
-
-        x_w2s_train_hard = x_w2s_train_hard_tb[:, 1:].copy()
-        x_w2s_train_easy_or_overlap = x_w2s_train_easy_or_overlap_tb[:, 1:].copy()
-
-        x_w2s_train_hard_normalized = x_w2s_train_hard / np.linalg.norm(x_w2s_train_hard, axis=1, keepdims=True)
-        x_w2s_train_easy_or_overlap_normalized = x_w2s_train_easy_or_overlap / np.linalg.norm(x_w2s_train_easy_or_overlap, axis=1, keepdims=True)
-        align_scores = np.abs(x_w2s_train_easy_or_overlap_normalized @ x_w2s_train_hard_normalized.T).max(axis=1)
-        # align_scores = np.abs(x_w2s_train_easy_or_overlap @ x_w2s_train_hard.T).max(axis=1)
-
-        # Apply change point detection to decide threshold for align scores
-        sort_order = align_scores.argsort()
-        x_w2s_train_easy_or_overlap_tb = x_w2s_train_easy_or_overlap_tb[sort_order, :]
-        sorted_align_scores = align_scores[sort_order]
-        # sorted_align_scores = np.sort(align_scores)
-        
-        # Perform change point detection
-        model = Binseg(model="l2").fit(sorted_align_scores.reshape(-1, 1))
-        change_points = model.predict(n_bkps=1)[0]
-        
-        # Use the detected change point as the threshold
-        align_score_threshold = sorted_align_scores[change_points]
-        overlap_indices = np.where(align_scores >= align_score_threshold)[0]
-        nonoverlap_indices = np.where(align_scores < align_score_threshold)[0]
-
-        x_w2s_train_overlap = x_w2s_train_easy_or_overlap_tb[overlap_indices, :]
-        x_w2s_train_easy = x_w2s_train_easy_or_overlap_tb[nonoverlap_indices, :]
-        
-        # idx 별로 sort해서 pd.DataFrame으로 정리
-        sample_indices = np.hstack([
-            x_w2s_train_easy[:, 0],
-            x_w2s_train_overlap[:, 0],
-            x_w2s_train_hard_tb[:, 0],
-            ]
-        ).tolist()
-
-        sample_diff_dict = {
-            "idx" : sample_indices,
-            "difficulty_label" : [0 for _ in range(len(x_w2s_train_easy))] 
-            + [1 for _ in range(len(x_w2s_train_overlap))] 
-            + [2 for _ in range(len(x_w2s_train_hard))]
+        gt_by_idx = {
+            int(i): int(l) for i, l in zip(train_dataset["idx"], train_dataset["hard_label"])
         }
 
-        pd.DataFrame(sample_diff_dict).to_csv(os.path.join(shared_info_file_dir, 'sample_info_label.csv'), index=False)
-             
+        fit_common = np.array(
+            sorted(set(weak_fit_idx.tolist()) & set(gt_by_idx)), dtype=np.int64
+        )
+        
+        wf_pos = {int(v): i for i, v in enumerate(weak_fit_idx)}
+        X_fit = x_weak_fit[[wf_pos[int(i)] for i in fit_common]]
+        y_fit = torch.tensor([gt_by_idx[int(i)] for i in fit_common], device=X_fit.device)
+
+        weak_probe = PROBES[probe_name](probe_cfg)
+        weak_probe.fit(X_fit, y_fit)
+        print(f"Probe fitted on {len(fit_common)} samples (GT half)")
+
+        labeled_idx = set(int(i) for i in train1_ds["idx"])
+        common = np.array(
+            sorted(set(weak_tgt_idx.tolist()) & set(strong_tgt_idx.tolist()) & labeled_idx),
+            dtype=np.int64,
+        )
+        print(
+            f"weak tgt: {len(weak_tgt_idx)}, strong tgt: {len(strong_tgt_idx)}, "
+            f"labeled ds: {len(labeled_idx)}, common: {len(common)}"
+        )
+
+        overlap_chk = set(fit_common.tolist()) & set(common.tolist())
+        assert not overlap_chk, (
+            f"probe fit set overlaps target set on {len(overlap_chk)} idx. "
+            f"Stale activation cache?"
+        )
+        if len(common) < 10:
+            raise RuntimeError(
+                "Too few overlapping idx. Did you regenerate activations after the fix?"
+            )
+
+        wt_pos = {int(v): i for i, v in enumerate(weak_tgt_idx)}
+        st_pos = {int(v): i for i, v in enumerate(strong_tgt_idx)}
+        x_weak = x_weak_tgt[[wt_pos[int(i)] for i in common]]
+        x_strong = x_strong_tgt[[st_pos[int(i)] for i in common]]
+
+        p = weak_probe.predict(x_weak).detach().float().cpu().numpy().reshape(-1)
+
+        conf = 2 * np.abs(p - 0.5)
+        sorted_conf = np.sort(conf)
+        cp = Binseg(model="l2").fit(sorted_conf.reshape(-1, 1)).predict(n_bkps=1)[0]
+        conf_thr = sorted_conf[min(cp, len(sorted_conf) - 1)]
+
+        hard_mask = conf <= conf_thr
+        rest_mask = ~hard_mask
+        if hard_mask.sum() == 0 or rest_mask.sum() == 0:
+            raise RuntimeError(f"Degenerate confidence split: hard={hard_mask.sum()}")
+
+        x_strong_np = x_strong.detach().float().cpu().numpy()
+        Xh = x_strong_np[hard_mask]
+        Xr = x_strong_np[rest_mask]
+        Xh_n = Xh / np.linalg.norm(Xh, axis=1, keepdims=True)
+        Xr_n = Xr / np.linalg.norm(Xr, axis=1, keepdims=True)
+        align = np.abs(Xr_n @ Xh_n.T).max(axis=1)
+
+        sorted_align = np.sort(align)
+        cp2 = Binseg(model="l2").fit(sorted_align.reshape(-1, 1)).predict(n_bkps=1)[0]
+        align_thr = sorted_align[min(cp2, len(sorted_align) - 1)]
+
+        hard_idx = common[hard_mask]
+        rest_idx = common[rest_mask]
+        overlap_idx = rest_idx[align >= align_thr]
+        easy_idx = rest_idx[align < align_thr]
+
+        print(f"easy={len(easy_idx)}, overlap={len(overlap_idx)}, hard={len(hard_idx)}")
+
+        sample_diff_dict = {
+            "idx": np.concatenate([easy_idx, overlap_idx, hard_idx]).tolist(),
+            "difficulty_label": [0] * len(easy_idx)
+            + [1] * len(overlap_idx)
+            + [2] * len(hard_idx),
+        }
+
+        # Save the classification results
+        print("========== Save the classification results ==========\n")
+        pd.DataFrame(sample_diff_dict).to_csv(
+            os.path.join(shared_info_file_dir, "sample_info_label.csv"), index=False
+        )
+
+        # Save the classified dataset
+        diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
+        idx_to_pos = {int(v): i for i, v in enumerate(train1_ds["idx"])}
+
+        for diff, idx_set in dict(
+            easy=easy_idx, overlap=overlap_idx, hard=hard_idx
+        ).items():
+            missing = [int(i) for i in idx_set if int(i) not in idx_to_pos]
+            assert not missing, f"{len(missing)} idx missing from train1_ds: {missing[:5]}"
+
+            positions = [idx_to_pos[int(i)] for i in idx_set]
+            ds = train1_ds.select(positions)
+            ds = ds.add_column("difficulty", [1 if diff == "hard" else 0] * len(ds))
+
+            diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
+            ds.save_to_disk(diff_ds_dir)
 
 
 if __name__ == "__main__":

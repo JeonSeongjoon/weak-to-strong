@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import torch
+import torch.nn as nn
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    AutoModelForCausalLM, 
 )
 
 from datacentric.utils import assert_type
@@ -34,6 +36,7 @@ class PredictorConfig(ABC):
 class ModelConfig(PredictorConfig):
     name: str
     enable_lora: bool
+    num_labels: int = 2
     lora_modules: Optional[List[str]] = None
 
     def to_dict(self):
@@ -56,7 +59,7 @@ class AutoCastingScore(torch.nn.Module):
 
 
 def init_tokenizer(cfg: ModelConfig) -> AutoTokenizer:
-    tokenizer = AutoTokenizer.from_pretrained(cfg.name)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.name, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -64,10 +67,17 @@ def init_tokenizer(cfg: ModelConfig) -> AutoTokenizer:
 
 
 def init_model(tokenizer, cfg: ModelConfig):
-    model = AutoModelForSequenceClassification.from_pretrained(
-        cfg.name, torch_dtype="auto", device_map={"": "cuda"},
-        # force_download=True,
-    )
+    if "Qwen" in cfg.name:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg.name, torch_dtype="auto", device_map={"": "cuda"},
+            trust_remote_code=True,
+        )
+    else:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            cfg.name, torch_dtype="auto", device_map={"": "cuda"},
+            trust_remote_code=True,
+            # force_download=True,
+        )
 
     if cfg.lora_modules is None and cfg.enable_lora:
         cfg.lora_modules = MODEL_REGISTRY.get(cfg.name, {}).get(
@@ -75,8 +85,9 @@ def init_model(tokenizer, cfg: ModelConfig):
         )
 
     model.config.pad_token_id = tokenizer.pad_token_id  # type: ignore
-    model.score.weight.data *= 0.01
-    model.config.problem_type = "single_label_classification"
+    if hasattr(model, "score"):
+        model.score.weight.data *= 0.01
+        model.config.problem_type = "single_label_classification"
 
     if cfg.enable_lora:
         lora_cfg = LoraConfig(
@@ -107,6 +118,7 @@ def init_model(tokenizer, cfg: ModelConfig):
 def init_model_from_pretrained(cfg: ModelConfig, tokenizer: AutoTokenizer, model_path: str):
     model = AutoModelForSequenceClassification.from_pretrained(
         model_path, torch_dtype="auto", device_map={"": "cuda"},
+        trust_remote_code=True,
         # force_download=True,
     )
 

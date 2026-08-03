@@ -11,6 +11,7 @@ from datacentric.sft_utils import literal
 @dataclass
 class SFTConfig(Serializable):
     # name of the model to train
+    model_name: str 
     weak_model_name: str = "Qwen/Qwen1.5-0.5B"
     strong_model_name: str = "meta-llama/Meta-Llama-3.1-8B"
     # name of the dataset to use

@@ -54,17 +54,20 @@ def gather_hiddens(
     L = assert_type(int, cfg.num_hidden_layers + 1)
 
     buffer = torch.empty(len(dataset), D, device=model.device, dtype=model.dtype)
+    idx_buffer = torch.empty(len(dataset), dtype=torch.long)
     print(f"Allocated buffer of shape {buffer.shape}")
+
     for i, ex in enumerate(tqdm(dataset)):
         ex = assert_type(dict, ex)
 
         out = model(ex["input_ids"][None], output_hidden_states=True)
-        act = torch.stack(out.hidden_states)[:, 0, -1] # Final token
+        act = torch.stack(out.hidden_states)[:, 0, -1]  # Final token
         if act.shape != (L, D):
             raise ValueError(f"Unexpected shape {act.shape} for hidden states on example {i}")
         buffer[i] = act[-1, :]
+        idx_buffer[i] = int(ex["idx"])
 
-    return buffer
+    return buffer, idx_buffer
 
 
 def move_best_ckpt(trainer: Trainer):

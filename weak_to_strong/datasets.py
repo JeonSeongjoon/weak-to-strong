@@ -23,6 +23,16 @@ def register_dataset(name: str, config: DatasetConfig):
     _REGISTRY[name] = config
 
 
+# split별 offset을 줘서 train/test idx 충돌 방지
+SPLIT_OFFSETS = {"train": 0, "test": 10_000_000, "val": 20_000_000}
+
+
+def _add_idx(ex, idx, offset: int, split: str):
+    # raw_idx: cfg.loader(split)가 반환한 원본 데이터셋에서의 위치 (원본 대조용)
+    # idx    : 파이프라인 전체에서 유일한 키
+    return {"idx": idx + offset, "raw_idx": idx, "split": split}
+
+
 def load_dataset(ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None):
     if split_sizes is None:
         split_sizes = dict(train=None, test=None)
@@ -37,16 +47,18 @@ def load_dataset(ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None
             ds = ds.select(range(n_docs))
         except IndexError as e:
             print(f"Warning {ds_name} has less than {n_docs} docs, using all: {e}")
-        ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))  
-        ds = ds.map(lambda ex, idx: {"idx": idx}, with_indices=True)
+        ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))
+        ds = ds.map(
+            _add_idx,
+            with_indices=True,
+            fn_kwargs=dict(offset=SPLIT_OFFSETS.get(split, 0), split=split),
+        )
         ds = ds.map(
             lambda ex: {"soft_label": [1 - float(ex["hard_label"]), float(ex["hard_label"])]}
         )
-        ds = ds.shuffle(seed=seed)  # shuffling a bit pointless for test set but wtv
+        ds = ds.shuffle(seed=seed)
         results[split] = ds
-    return results   
-    # results => dict("train" : trainset, "test" : testset)
-    # ds => {"txt", "hard_label", "soft_label", "idx"}
+    return results
 
 
 def tokenize_dataset(

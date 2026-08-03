@@ -571,10 +571,26 @@ def load_model_and_save_activations(
             print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use after model init")
         acts_dir.mkdir(parents=True, exist_ok=True)
         for name, ds in ds_dict.items():
-            acts = gather_hiddens(model, ds)
-            torch.save(acts, acts_dir / f"{name}.pt")
-            print(f"Saved activations for {name} to {acts_dir / f'{name}.pt'}")
+            assert "idx" in ds.column_names, f"{name} split has no 'idx' column"
+            acts, idxs = gather_hiddens(model, ds)
+            torch.save(
+                {"acts": acts.cpu(), "idx": idxs.cpu(), "model": model_cfg.name},
+                acts_dir / f"{name}.pt",
+            )
+            print(f"Saved {len(idxs)} activations for {name} to {acts_dir / f'{name}.pt'}")
         
         del model
         torch.cuda.empty_cache()
         gc.collect()
+
+
+
+def load_activations(path: Path, device: str = "cuda"):
+    """returns (acts: Tensor[N, D], idx: np.ndarray[N])"""
+    obj = torch.load(path, map_location=device)
+    if not isinstance(obj, dict) or "idx" not in obj:
+        raise ValueError(
+            f"{path} is a legacy activation file without idx. "
+            f"Delete the activations directory and regenerate."
+        )
+    return obj["acts"].to(device), obj["idx"].cpu().numpy()

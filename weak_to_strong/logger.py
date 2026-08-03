@@ -12,7 +12,6 @@ def append_to_jsonl(path: str, data: dict):
 
 class WandbLogger(object):
     CURRENT = None
-
     log_path = None
 
     def __init__(

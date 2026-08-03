@@ -18,10 +18,14 @@ class LossFnBase:
 
 # Custom loss function
 class xent_loss(LossFnBase):
-    def __call__(
-        self, logits: torch.Tensor, 
+    def __init__(self):
+        self.name = "xent"
+        
+    def __call__(self, 
+        logits: torch.Tensor, 
         labels: torch.Tensor, 
-        step_frac: float
+        step_frac: float,
+        diff: torch.Tensor = None
     ) -> torch.Tensor:
         """
         This function calculates the cross entropy loss between logits and labels.
@@ -34,8 +38,12 @@ class xent_loss(LossFnBase):
         Returns:
         The mean of the cross entropy loss.
         """
-        loss = torch.nn.functional.cross_entropy(logits, labels)
+        logits = logits.float()
+        labels = labels.float()
+
+        loss = torch.nn.functional.cross_entropy(logits, labels, reduction="none")
         return loss.mean()
+    
 
 
 class product_loss_fn(LossFnBase):
@@ -54,6 +62,7 @@ class product_loss_fn(LossFnBase):
         beta: float = 1.0,  # how much to weigh the strong model
         warmup_frac: float = 0.1,  # in terms of fraction of total training steps
     ):
+        self.name = "product"
         self.alpha = alpha
         self.beta = beta
         self.warmup_frac = warmup_frac
@@ -63,6 +72,7 @@ class product_loss_fn(LossFnBase):
         logits: torch.Tensor,
         labels: torch.Tensor,
         step_frac: float,
+        diff: torch.Tensor = None
     ) -> torch.Tensor:
         preds = torch.softmax(logits, dim=-1)
         target = torch.pow(preds, self.beta) * torch.pow(labels, self.alpha)
@@ -86,6 +96,7 @@ class logconf_loss_fn(LossFnBase):
         aux_coef: float = 0.5,
         warmup_frac: float = 0.1,  # in terms of fraction of total training steps
     ):
+        self.name = "logconf"
         self.aux_coef = aux_coef
         self.warmup_frac = warmup_frac
 
@@ -94,6 +105,7 @@ class logconf_loss_fn(LossFnBase):
         logits: torch.Tensor,
         labels: torch.Tensor,
         step_frac: float,
+        diff: torch.Tensor = None
     ) -> torch.Tensor:
         logits = logits.float()
         labels = labels.float()
@@ -113,7 +125,6 @@ class logconf_loss_fn(LossFnBase):
         return loss.mean()
 
 
-# Final version
 class conf_induc_loss(LossFnBase):
     def __init__(
         self,
@@ -121,6 +132,7 @@ class conf_induc_loss(LossFnBase):
         update_every: int = 50,
         ema_alpha: float = 0.9,
     ):
+        self.name = "conf_induc"
         self.warmup_frac = warmup_frac
         self.update_every = update_every
         self.ema_alpha = ema_alpha
@@ -134,6 +146,7 @@ class conf_induc_loss(LossFnBase):
             logits: torch.Tensor, 
             labels: torch.Tensor, 
             step_frac,
+            diff: torch.Tensor = None
         ):
 
         logits = logits.float()
@@ -175,10 +188,10 @@ class conf_induc_loss(LossFnBase):
             return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
 
         
-        coef = (conf >= self.threshold).float().unsqueeze(-1)
+        coef = (conf < self.threshold).float().unsqueeze(-1)
         strong_preds = torch.softmax(logits, dim=-1).detach()
         
-        target = coef * labels + (1.0 - coef) * strong_preds
+        target =  (1.0 - coef) * labels + coef * strong_preds
         loss = torch.nn.functional.cross_entropy(logits, target, reduction='none')
 
         self.easy = coef
@@ -186,3 +199,39 @@ class conf_induc_loss(LossFnBase):
         
         return loss.mean()
 
+
+
+class conf_induc_anc_loss(LossFnBase):
+    def __init__(
+        self,
+        warmup_frac: float = 0.1,
+    ):
+        self.name = "conf_induc_anc"
+        self.warmup_frac = warmup_frac  
+
+    def __call__(self, 
+            logits: torch.Tensor, 
+            labels: torch.Tensor, 
+            step_frac,
+            diff: torch.Tensor = None,
+        ):
+        if diff is None:
+            raise ValueError("diff should be not None")
+
+        logits = logits.float()
+        labels = labels.float()
+
+        if step_frac < self.warmup_frac:
+            return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
+
+        coef = diff.float().unsqueeze(-1)
+
+        # coef error protection
+        if torch.any((coef < 0) | (coef > 1)):
+            raise ValueError(f"diff must be in [0, 1], got range [{coef.min().item()}, {coef.max().item()}]")
+        
+        strong_preds = torch.softmax(logits, dim=-1).detach()
+        target =  (1.0 - coef) * labels + coef * strong_preds
+        loss = torch.nn.functional.cross_entropy(logits, target, reduction='none')
+
+        return loss.mean()

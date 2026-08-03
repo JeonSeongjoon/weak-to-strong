@@ -36,7 +36,7 @@ def train_model(
     ds: datasets.Dataset,
     batch_size: int,
     lr: float = 1e-5,
-    loss_fn: Callable = xent_loss,
+    loss_fn: Callable = None,
     log_every: int = 10,
     eval_every: int = 100,
     eval_batch_size: int = 256,
@@ -87,13 +87,10 @@ def train_model(
     losses = []
     accuracies = []
     thresholds = {}                       # Dictionary that has a thresholds value for each step     
-    sample_info = {                       # Dictionary that has sample info for each sample
-        "idx" : [],
-        "difficulty" : [],
-        "confidence" : []
-    }
-    # used for comparing results of true classification and loss classification
-    eval_acc_dict = {}
+    sample_info = {}                       # Dictionary that has sample info for each sample
+    is_conf_induc = loss_fn.name == "conf_induc"
+    is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
+
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
     # we use GPU 0 as the output device. This sadly means that this device will store
@@ -112,14 +109,14 @@ def train_model(
             if train_with_dropout:
                 model.train()
             eval_accs = np.mean([r["acc"] for r in eval_results])
-            eval_acc_dict[step] = eval_accs
             logger.logkv("eval_accuracy", eval_accs)
 
         all_logits = []
         all_labels = []
         all_idxs = []
+        all_diffs = []
 
-        for i in range(batch_size // minibatch_size):    # 단일 batch 내의 minibatch 수만큼 반복
+        for i in range(batch_size // minibatch_size):    
             try:
                 mbatch = [next(it) for _ in range(minibatch_size)] 
             except StopIteration:
@@ -133,35 +130,39 @@ def train_model(
                 )
                 .to(io_device)
             )
-
             labels = torch.tensor([ex["soft_label"] for ex in mbatch]).to(io_device)   # minibatch label set (soft label)
             logits = model(input_ids)
 
             all_logits.extend(logits.to(io_device))
             all_labels.extend(labels)
             all_idxs.extend([ex["idx"] for ex in mbatch])
+            if is_conf_induc_anc: 
+                all_diffs.extend([ex["difficulty"] for ex in mbatch])
 
         all_logits = torch.stack(all_logits)
         all_labels = torch.stack(all_labels)
+        all_diffs = torch.tensor(all_diffs, dtype=torch.float32, device=io_device) if is_conf_induc_anc else None
 
-        loss = loss_fn(
-            all_logits, 
-            all_labels, 
-            step_frac=step/nsteps, 
-        )
+        loss = loss_fn(all_logits, all_labels, step_frac=step/nsteps, diff=all_diffs)
         loss_tot += loss.item()
         loss.backward()
         losses.append(loss_tot)
 
-        thresholds[f"step{step}"] = loss_fn.threshold
-        sample_es_or_olp = loss_fn.easy 
-        sample_conf = loss_fn.conf
-        
-        for i in range(len(all_idxs)):
-            diff_val = sample_es_or_olp[i]
-            sample_info["idx"].append(all_idxs[i])
-            sample_info["difficulty"].append(diff_val.item() if hasattr(diff_val, "item") else diff_val)
-            sample_info["confidence"].append(sample_conf[i].item())
+
+        if is_conf_induc:
+            if not sample_info:
+                for key in ["idx", "difficulty", "confidence"]:
+                    sample_info[key] = []
+
+            thresholds[f"step{step}"] = loss_fn.threshold
+            sample_es_or_olp = loss_fn.easy 
+            sample_conf = loss_fn.conf
+            
+            for i in range(len(all_idxs)):
+                diff_val = sample_es_or_olp[i]
+                sample_info["idx"].append(all_idxs[i])
+                sample_info["difficulty"].append(diff_val.item() if hasattr(diff_val, "item") else diff_val)
+                sample_info["confidence"].append(sample_conf[i].item())
 
 
         accuracies.append(
@@ -215,7 +216,7 @@ def train_and_save_model(
     eval_batch_size: Optional[int] = None,
     minibatch_size_per_device: Optional[int] = None,
     save_path: Optional[str] = None,
-    loss_fn: Callable = xent_loss,
+    loss_fn: Callable = None,
     label: str = "default",
     force_retrain: bool = False,
     train_with_dropout: bool = False,
@@ -224,7 +225,7 @@ def train_and_save_model(
     optimizer_name: str = "adam",
     eval_every: Optional[int] = None,
     weak_model_size: Optional[str] = None,
-    shared_info_file_dir: str
+    shared_info_file_dir: str = None
 ):
     if eval_batch_size is None:
         eval_batch_size = batch_size
@@ -237,21 +238,22 @@ def train_and_save_model(
 
     def maybe_load_model(model):
         if os.path.exists(os.path.join(save_path, "results.pkl")) and not force_retrain:
-            print("loading from", save_path)
-            checkpoint_path = os.path.join(save_path, "pytorch_model.bin")
-            index_path = os.path.join(save_path, "pytorch_model.bin.index.json")
-
-            if not os.path.exists(checkpoint_path):
-                # Assume this means we have a sharded checkpoint, and load it appropriately
-                load_sharded_checkpoint(model, save_path)
-            else:
-                state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
-                state_dict = {
-                    k.replace("transformer.module", "transformer"): v
-                    for (k, v) in state_dict.items()
-                }
-                model.load_state_dict(state_dict, strict=False)
             return True
+            #print("loading from", save_path)
+            #checkpoint_path = os.path.join(save_path, "pytorch_model.bin")
+            #index_path = os.path.join(save_path, "pytorch_model.bin.index.json")
+
+            #if not os.path.exists(checkpoint_path):
+            #    # Assume this means we have a sharded checkpoint, and load it appropriately
+            #    load_sharded_checkpoint(model, save_path)
+            #else:
+            #    state_dict = torch.load(os.path.join(save_path, "pytorch_model.bin"))
+            #    state_dict = {
+            #        k.replace("transformer.module", "transformer"): v
+            #        for (k, v) in state_dict.items()
+            #    }
+            #    model.load_state_dict(state_dict, strict=False)
+            #return True
         return False
 
     already_trained = False
@@ -292,7 +294,9 @@ def train_and_save_model(
             minibatch_size = minibatch_size_per_device
 
     if already_trained:
-        test_results = eval_model_acc(model, test_ds, eval_batch_size)
+        test_results = None
+        inference_results = None
+        # test_results = eval_model_acc(model, test_ds, eval_batch_size)
     else:
         start = time.time()
         test_results, sample_info, thresholds = train_model(
@@ -313,40 +317,47 @@ def train_and_save_model(
         )
         print("Model training took", time.time() - start, "seconds")
         
-        if save_path and weak_model_size == None:  
+        if save_path and weak_model_size is not None:  
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
+            # Just save the models when they are cases of ground truth training
             (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
                 save_path,
                 safe_serialization=False
             )
             print("saved", save_path)
 
-        if os.path.exists(shared_info_file_dir):
+        if (shared_info_file_dir is not None) and (weak_model_size is not None):
             # Save sample info as pandas?
-            pd.DataFrame(sample_info).to_csv(os.path.join(shared_info_file_dir, 'sample_info.csv'), index=False)
-            
-            # Save thresholds dict as jsonl
-            with open(os.path.join(shared_info_file_dir, f"thresholds.json"), "w") as f:
-                json.dump(thresholds, f, indent=2)
+            if sample_info:
+                pd.DataFrame(sample_info).to_csv(
+                    os.path.join(shared_info_file_dir, 'sample_info.csv'), 
+                    index=False
+                )
+            # Save thresholds dict as json
+            if thresholds:
+                with open(os.path.join(shared_info_file_dir, f"thresholds.json"), "w") as f:
+                    json.dump(thresholds, f, indent=2)
 
-    inference_results = None
-    if inference_ds:
-        inference_results = eval_model_acc(model, inference_ds, eval_batch_size)
-        logger.logkv("inference_accuracy", np.mean([r["acc"] for r in inference_results]))
+        inference_results = None
+        if inference_ds:
+            inference_results = eval_model_acc(model, inference_ds, eval_batch_size)
+            logger.logkv("inference_accuracy", np.mean([r["acc"] for r in inference_results]))
+    
+        if save_path:
+            with open(os.path.join(save_path, "results.pkl"), "wb") as f:
+                pickle.dump(
+                    {
+                        "avg_acc_test": float(np.mean([r["acc"] for r in test_results])),
+                        "avg_acc_inference": float(
+                            np.mean([r["acc"] for r in inference_results] if inference_results else [])
+                        ),
+                        "test_results": test_results,
+                        "inference_results": inference_results if inference_results else [],
+                    },
+                    f,
+                )
 
-    if save_path:
-        with open(os.path.join(save_path, "results.pkl"), "wb") as f:
-            pickle.dump(
-                {
-                    "avg_acc_test": float(np.mean([r["acc"] for r in test_results])),
-                    "avg_acc_inference": float(
-                        np.mean([r["acc"] for r in inference_results] if inference_results else [])
-                    ),
-                    "test_results": test_results,
-                    "inference_results": inference_results if inference_results else [],
-                },
-                f,
-            )
+   
     # try to clean up memory
     clear_mem()
     logger.shutdown()
