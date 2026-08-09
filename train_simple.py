@@ -172,7 +172,8 @@ def main(
     ds_name: str = "cosmos_qa",
     loss: str = "xent",
     n_docs: int = 20000,
-    n_test_docs: int = 10000,
+    n_valid_docs: int = 1000,
+    n_test_docs: int = 2000,
     model_size: str = "gpt2-large",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
@@ -275,6 +276,11 @@ def main(
     if weak_labels_path is None:
         split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)       # train set : 10000
         train1_ds, train2_ds = split_data["train"], split_data["test"]              # validation set : 10000
+
+        # split train and validation set
+        #train_val_ds = train1_ds.train_test_split(test_size=1000, seed=seed)
+        #train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
+
         print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))       # test set : 10000
         config_name = get_config_foldername(config)
     else:
@@ -311,6 +317,7 @@ def main(
     # Tokenize datasets
     tokenizer = get_tokenizer(model_config.name)
     train1_ds = tokenize_dataset(train1_ds, tokenizer, max_ctx)
+    #valid_ds = tokenize_dataset(valid_ds, tokenizer, max_ctx)
     test_ds = tokenize_dataset(test_ds, tokenizer, max_ctx)
     if train2_ds:
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
@@ -324,6 +331,7 @@ def main(
     test_results, inference_results = train_and_save_model(
         model_config,
         train1_ds,
+        #valid_ds,
         test_ds,
         inference_ds=train2_ds,
         batch_size=batch_size,

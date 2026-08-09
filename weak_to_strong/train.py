@@ -34,6 +34,7 @@ class ModelConfig:
 def train_model(
     model: torch.nn.Module,
     ds: datasets.Dataset,
+    #valid_ds: datasets.Dataset,
     batch_size: int,
     lr: float = 1e-5,
     loss_fn: Callable = None,
@@ -207,6 +208,7 @@ def train_model(
 def train_and_save_model(
     model_config: ModelConfig,
     train_ds: datasets.Dataset,
+    #valid_ds: datasets.Dataset,
     test_ds: datasets.Dataset,
     inference_ds: Optional[datasets.Dataset] = None,
     *,
@@ -302,6 +304,7 @@ def train_and_save_model(
         test_results, sample_info, thresholds = train_model(
             model,
             train_ds,
+            #valid_ds,
             batch_size,
             lr=lr,
             epochs=epochs,

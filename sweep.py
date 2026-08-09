@@ -72,7 +72,5 @@ if __name__ == "__main__":
     
 
 #[ LAB ver. ] -> tmux attach -t train
-#CUDA_VISIBLE_DEVICES= python sweep.py --model_sizes=[gpt2-large,gpt2-xl,Qwen/Qwen-1_8B] --seed=0 --loss=conf_induc --results_folder=./cosq_mid_ci_0 --epochs=2 --ds_name=cosmos_qa
-#CUDA_VISIBLE_DEVICES=0,1 python weak-to-strong/sweep.py --model_sizes=gpt2-large,gpt2-xl,Qwen/Qwen-1_8B,Qwen/Qwen_7B --seed=25 --loss=conf_induc --results_folder=./weak-to-strong/results/train_results/cosq_large_xent_25 
-
-#CUDA_VISIBLE_DEVICES=0,1,2,3 python weak-to-strong/sweep.py --model_sizes=gpt2-large,gpt2-xl,Qwen/Qwen-1_8B,Qwen/Qwen_7B --seed=25 --loss=conf_induc_anc --mode=diff --results_folder=./weak-to-strong/results/train_results/cosq_large_xent_25 
+# CUDA_VISIBLE_DEVICES=0,1,2,3 python weak-to-strong/sweep.py --model_sizes=gpt2-large,gpt2-xl,Qwen/Qwen-1_8B,Qwen/Qwen-7B --seed=20 --loss=conf_induc --mode=w2sg --results_folder=./weak-to-strong/results/train_results/cosq_large_xent_20 
+# CUDA_VISIBLE_DEVICES=0,1,2,3 python weak-to-strong/sweep.py --model_sizes=gpt2-large,gpt2-xl,Qwen/Qwen-1_8B,Qwen/Qwen-7B --seed=20 --loss=conf_induc_anc --mode=diff --results_folder=./weak-to-strong/results/train_results/cosq_large_xent_20 

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-SEED = 25
+SEED = 20
 folder_prnt_path = Path(f"./weak-to-strong/results/sample_difficulty/seed={SEED}")
 folder_li = [path.name for path in folder_prnt_path.iterdir() if path.is_dir()]
 
