@@ -21,7 +21,8 @@ from weak_to_strong.datasets import (VALID_DATASETS, load_dataset,
 from weak_to_strong.loss import (logconf_loss_fn, 
     product_loss_fn, 
     xent_loss, 
-    conf_induc_loss
+    conf_induc_loss,
+    conf_induc_filt_loss
 )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
@@ -141,7 +142,8 @@ loss_dict = {
     "logconf": logconf_loss_fn(),
     "product": product_loss_fn(),
     "xent": xent_loss(),
-    "conf_induc": conf_induc_loss()
+    "conf_induc": conf_induc_loss(),
+    "conf_induc_filt": conf_induc_filt_loss()
 }
 
 VALID_LOSSES: List[str] = list(loss_dict.keys())
@@ -172,8 +174,8 @@ def main(
     ds_name: str = "cosmos_qa",
     loss: str = "xent",
     n_docs: int = 20000,
-    n_valid_docs: int = 1000,
-    n_test_docs: int = 2000,
+    n_valid_docs: int = 200,
+    n_test_docs: int = 1000,
     model_size: str = "gpt2-large",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
@@ -194,7 +196,7 @@ def main(
     sweep_subfolder: str = "default",
     # Set to a very large value so that by default we don't do any intermediate evals but
     # still do final evals (which requires eval_every to be set to a non-zero, non-None value)
-    eval_every: int = 1000000,
+    eval_every: int = 60,
     sync_command: Optional[str] = None,
 ):
 
@@ -267,21 +269,21 @@ def main(
     eval_batch_size = model_config.eval_batch_size
     random.seed(seed)
 
-    # Load dataset
-    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs, test=n_test_docs))
+    # Load dataset                                                                                               # 다음과 같이 수정 필요
+    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs+n_valid_docs*2, test=n_test_docs))  # train=n_docs+n_valid_docs
 
     # Split the training dataset in half
-    train_dataset, test_ds = dataset["train"], dataset["test"]                 # train set + test set, validation set
+    train_dataset, test_ds = dataset["train"], dataset["test"]                 
 
-    if weak_labels_path is None:
-        split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)       # train set : 10000
-        train1_ds, train2_ds = split_data["train"], split_data["test"]              # validation set : 10000
+    if weak_labels_path is None:                                                    # 다음과 같이 수정 필요
+        split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)       # train_size = n_docs/2 + n_valid_docs
+        train1_ds, train2_ds = split_data["train"], split_data["test"]              
+        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))      
 
         # split train and validation set
-        #train_val_ds = train1_ds.train_test_split(test_size=1000, seed=seed)
-        #train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
+        train_val_ds = train1_ds.train_test_split(test_size=n_valid_docs, seed=seed)  #
+        train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
 
-        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))       # test set : 10000
         config_name = get_config_foldername(config)
     else:
         if not weak_labels_path.endswith("weak_labels"):
@@ -301,6 +303,10 @@ def main(
         print("Successfully load from disk.")
         train2_ds = None
 
+        # validation set
+        train_val_ds = train1_ds.train_test_split(test_size=n_valid_docs, seed=seed)
+        train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
+
         weak_model_config = json.load(open(weak_labels_path.replace("weak_labels", "config.json")))
         config["weak_model_size"] = weak_model_config["model_size"]
         config_name = get_config_foldername(config)
@@ -317,12 +323,11 @@ def main(
     # Tokenize datasets
     tokenizer = get_tokenizer(model_config.name)
     train1_ds = tokenize_dataset(train1_ds, tokenizer, max_ctx)
-    #valid_ds = tokenize_dataset(valid_ds, tokenizer, max_ctx)
+    valid_ds = tokenize_dataset(valid_ds, tokenizer, max_ctx)
     test_ds = tokenize_dataset(test_ds, tokenizer, max_ctx)
     if train2_ds:
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
     train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/')) 
-
     loss_fn = loss_dict[loss]
 
     
@@ -331,7 +336,7 @@ def main(
     test_results, inference_results = train_and_save_model(
         model_config,
         train1_ds,
-        #valid_ds,
+        valid_ds,
         test_ds,
         inference_ds=train2_ds,
         batch_size=batch_size,

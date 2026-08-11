@@ -16,8 +16,8 @@ class LossFnBase:
         raise NotImplementedError
 
 
-# Custom loss function
-class xent_loss(LossFnBase):
+# Baseline
+class xent_loss(LossFnBase):       
     def __init__(self):
         self.name = "xent"
         
@@ -128,7 +128,7 @@ class logconf_loss_fn(LossFnBase):
 class conf_induc_loss(LossFnBase):
     def __init__(
         self,
-        warmup_frac: float = 0.1,
+        warmup_frac: float = 0.2,
         update_every: int = 50,
         ema_alpha: float = 0.9,
     ):
@@ -187,15 +187,92 @@ class conf_induc_loss(LossFnBase):
         if self.threshold is None:
             return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
 
-        
         coef = (conf < self.threshold).float().unsqueeze(-1)
-        strong_preds = torch.softmax(logits, dim=-1).detach()
+        strong_preds = torch.nn.functional.one_hot(
+                    logits.argmax(dim=-1), num_classes=logits.size(-1)
+        ).float().detach()
         
         target =  (1.0 - coef) * labels + coef * strong_preds
         loss = torch.nn.functional.cross_entropy(logits, target, reduction='none')
 
         self.easy = coef
         self.conf = conf
+        
+        return loss.mean()
+
+
+class conf_induc_filt_loss(LossFnBase):
+    def __init__(
+        self,
+        warmup_frac: float = 0.1,
+        update_every: int = 50,
+        ema_alpha: float = 0.9,
+    ):
+        self.name = "conf_induc_filt"
+        self.warmup_frac = warmup_frac
+        self.update_every = update_every
+        self.ema_alpha = ema_alpha
+        self.threshold = None     # EMA-smoothed threshold (실제 사용)
+        self._step_count = 0
+        self._conf_buffer = []
+        self.easy = None
+        self.conf = None
+
+    def __call__(self, 
+            logits: torch.Tensor, 
+            labels: torch.Tensor, 
+            step_frac,
+            diff: torch.Tensor = None
+        ):
+
+        logits = logits.float()
+        labels = labels.float()
+        conf = labels.max(dim=-1).values
+
+        if step_frac < self.warmup_frac:
+            self.easy = [None] * len(labels)
+            self.conf = conf
+            return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
+
+        # 매 step confidence buffer에 누적
+        self._conf_buffer.append(conf.detach().cpu().numpy())
+        self._step_count += 1
+
+        # update 주기마다: 누적 데이터로 binseg → EMA로 smoothing 
+        if self._step_count % self.update_every == 0:
+            all_conf = np.concatenate(self._conf_buffer)
+            sorted_scores = np.sort(all_conf)
+            try:
+                algo = rpt.Binseg(model="l2").fit(sorted_scores)
+                breakpoint_idx = algo.predict(n_bkps=1)[0]
+                threshold_now = float(sorted_scores[breakpoint_idx])
+            except Exception:
+                threshold_now = float(np.median(all_conf))
+
+            # EMA 갱신
+            if self.threshold is None:
+                self.threshold = threshold_now      # 첫 갱신은 그대로
+            else:
+                self.threshold = (
+                    self.ema_alpha * self.threshold + (1 - self.ema_alpha) * threshold_now
+                )
+
+            self._conf_buffer = []   # buffer 비우기
+
+        # 첫 update 전이면 weak label만 사용
+        if self.threshold is None:
+            return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
+
+        keep = conf >= self.threshold          # bool, shape (N,)
+        self.easy = keep.float().unsqueeze(-1)
+        self.conf = conf
+
+        if keep.sum() == 0:
+            return logits.sum() * 0.0
+
+        loss = torch.nn.functional.cross_entropy(
+            logits[keep], labels[keep], reduction='none'
+        )
         
         return loss.mean()
 
@@ -230,7 +307,9 @@ class conf_induc_anc_loss(LossFnBase):
         if torch.any((coef < 0) | (coef > 1)):
             raise ValueError(f"diff must be in [0, 1], got range [{coef.min().item()}, {coef.max().item()}]")
         
-        strong_preds = torch.softmax(logits, dim=-1).detach()
+        strong_preds = torch.nn.functional.one_hot(
+                    logits.argmax(dim=-1), num_classes=logits.size(-1)
+        ).float().detach()
         target =  (1.0 - coef) * labels + coef * strong_preds
         loss = torch.nn.functional.cross_entropy(logits, target, reduction='none')
 

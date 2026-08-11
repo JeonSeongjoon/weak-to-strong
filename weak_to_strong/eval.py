@@ -38,10 +38,12 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
         results = []
         # for ex in ds:
         for batch in to_batch(ds, eval_batch_size):
+
             # pad input_ids to common length
             input_ids = torch.nn.utils.rnn.pad_sequence(
                 [torch.tensor(ex) for ex in batch["input_ids"]], batch_first=True
             ).to(model.device if hasattr(model, "device") else "cpu")
+
             labels = batch["soft_label"]
             idxs = batch["idx"]
             # run forward pass

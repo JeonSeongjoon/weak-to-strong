@@ -167,7 +167,8 @@ def main(
     ds_name: str = "cosmos_qa",
     loss: str = "conf_induc_anc",
     n_docs: int = 20000,
-    n_test_docs: int = 10000,
+    n_valid_docs: int = 200,
+    n_test_docs: int = 1000,
     model_size: str = "gpt2-large",
     lr: Optional[float] = None,
     optim: Optional[str] = None,
@@ -188,7 +189,7 @@ def main(
     sweep_subfolder: str = "default",
     # Set to a very large value so that by default we don't do any intermediate evals but
     # still do final evals (which requires eval_every to be set to a non-zero, non-None value)
-    eval_every: int = 1000000,
+    eval_every: int = None,
     sync_command: Optional[str] = None,
 ):
 
@@ -262,7 +263,7 @@ def main(
 
    
     # Load dataset
-    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs, test=n_test_docs))             
+    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(test=n_test_docs))             
     diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
 
     ds = None
@@ -302,6 +303,7 @@ def main(
     test_results, inference_results = train_and_save_model(
         model_config,
         train1_ds,
+        None,
         test_ds,
         inference_ds=train2_ds,
         batch_size=batch_size,

@@ -34,7 +34,7 @@ class ModelConfig:
 def train_model(
     model: torch.nn.Module,
     ds: datasets.Dataset,
-    #valid_ds: datasets.Dataset,
+    valid_ds: datasets.Dataset,
     batch_size: int,
     lr: float = 1e-5,
     loss_fn: Callable = None,
@@ -89,7 +89,7 @@ def train_model(
     accuracies = []
     thresholds = {}                       # Dictionary that has a thresholds value for each step     
     sample_info = {}                       # Dictionary that has sample info for each sample
-    is_conf_induc = loss_fn.name == "conf_induc"
+    is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
     is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
 
 
@@ -102,7 +102,7 @@ def train_model(
         loss_tot = 0
 
         if eval_every and (step + 1) % eval_every == 0:
-            eval_results = eval_model_acc(model, eval_ds, eval_batch_size)
+            eval_results = eval_model_acc(model, valid_ds, eval_batch_size)  
             if gradient_checkpointing:
                 (
                     model if hasattr(model, "gradient_checkpointing_enable") else model.module
@@ -110,7 +110,7 @@ def train_model(
             if train_with_dropout:
                 model.train()
             eval_accs = np.mean([r["acc"] for r in eval_results])
-            logger.logkv("eval_accuracy", eval_accs)
+            logger.logkv("valid_accuracy", eval_accs)
 
         all_logits = []
         all_labels = []
@@ -208,7 +208,7 @@ def train_model(
 def train_and_save_model(
     model_config: ModelConfig,
     train_ds: datasets.Dataset,
-    #valid_ds: datasets.Dataset,
+    valid_ds: datasets.Dataset,
     test_ds: datasets.Dataset,
     inference_ds: Optional[datasets.Dataset] = None,
     *,
@@ -304,7 +304,7 @@ def train_and_save_model(
         test_results, sample_info, thresholds = train_model(
             model,
             train_ds,
-            #valid_ds,
+            valid_ds,
             batch_size,
             lr=lr,
             epochs=epochs,
@@ -320,7 +320,7 @@ def train_and_save_model(
         )
         print("Model training took", time.time() - start, "seconds")
         
-        if save_path and weak_model_size is not None:  
+        if save_path and (weak_model_size is None):  
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
             # Just save the models when they are cases of ground truth training
             (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
