@@ -89,9 +89,8 @@ def train_model(
     accuracies = []
     thresholds = {}                       # Dictionary that has a thresholds value for each step     
     sample_info = {}                       # Dictionary that has sample info for each sample
-    is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
-    is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
-
+    is_conf_induc_anc = loss_fn.name.startswith("conf_induc_anc")
+    is_conf_induc = loss_fn.name.startswith("conf_induc") and not is_conf_induc_anc
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
     # we use GPU 0 as the output device. This sadly means that this device will store

@@ -567,6 +567,8 @@ def main(
         )
 
         # Save the classified dataset
+        dcl_diff_ds_len = {}
+        total_num = 0 
         diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
         idx_to_pos = {int(v): i for i, v in enumerate(train1_ds["idx"])}
 
@@ -583,6 +585,16 @@ def main(
             diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
             ds.save_to_disk(diff_ds_dir)
 
+            ds_len = len(ds)
+            dcl_diff_ds_len[f"num_{diff}(dcl)"] = ds_len
+            total_num += ds_len
+
+        dcl_diff_ds_len["%_easy(dcl)"] = dcl_diff_ds_len["num_easy(dcl)"]/total_num
+        dcl_diff_ds_len["%_overlap(dcl)"] = dcl_diff_ds_len["num_overlap(dcl)"]/total_num
+        dcl_diff_ds_len["%_hard(dcl)"] = dcl_diff_ds_len["num_hard(dcl)"]/total_num
+
+        with open(os.path.join(shared_info_file_dir, "diff_ds_length.json"), "w") as f:
+          json.dump(dcl_diff_ds_len, f, indent=2)
 
 if __name__ == "__main__":
     fire.Fire(main)

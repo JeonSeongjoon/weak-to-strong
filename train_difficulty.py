@@ -22,7 +22,8 @@ from weak_to_strong.loss import (logconf_loss_fn,
     product_loss_fn, 
     xent_loss, 
     conf_induc_loss,
-    conf_induc_anc_loss
+    conf_induc_anc_loss,
+    conf_induc_anc_filt_loss,
 )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
@@ -137,6 +138,7 @@ loss_dict = {
     "xent": xent_loss(),
     "conf_induc": conf_induc_loss(),
     "conf_induc_anc": conf_induc_anc_loss(),
+    "conf_induc_anc_filt": conf_induc_anc_filt_loss(), 
 }
 
 VALID_LOSSES: List[str] = list(loss_dict.keys())
@@ -189,7 +191,7 @@ def main(
     sweep_subfolder: str = "default",
     # Set to a very large value so that by default we don't do any intermediate evals but
     # still do final evals (which requires eval_every to be set to a non-zero, non-None value)
-    eval_every: int = None,
+    eval_every: int = 1000000,
     sync_command: Optional[str] = None,
 ):
 
@@ -267,6 +269,7 @@ def main(
     diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
 
     ds = None
+    ds_len = []
     for diff in ["easy", "overlap", "hard"]:
         diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
 
@@ -275,10 +278,10 @@ def main(
             ds = curr_ds
         else:
             ds = concatenate_datasets([ds, curr_ds])
-
+    
+    print()
     train1_ds = ds.shuffle(seed=seed)         # Already tokenized
     train2_ds = None
-    print("len(train):", len(train1_ds))
 
     tokenizer = get_tokenizer(model_config.name)
     test_ds = dataset["test"] 
