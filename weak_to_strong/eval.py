@@ -36,6 +36,10 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
 
     with torch.no_grad():
         results = []
+        gold_loss = 0
+        weak_loss = 0
+        n_total = 0
+
         # for ex in ds:
         for batch in to_batch(ds, eval_batch_size):
 
@@ -44,7 +48,9 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
                 [torch.tensor(ex) for ex in batch["input_ids"]], batch_first=True
             ).to(model.device if hasattr(model, "device") else "cpu")
 
-            labels = batch["soft_label"]
+            gt_labels = batch["gt_label"] if "gt_label" in batch else np.argmax(batch["soft_label"], axis=-1)
+            sf_labels = batch["soft_label"]
+
             idxs = batch["idx"]
             # run forward pass
             raw_logits = model(input_ids)
@@ -53,7 +59,20 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
             logits = unpack(raw_logits)
 
             preds = np.argmax(probs, axis=-1)
-            labels = np.argmax(labels, axis=-1)
+            labels = np.argmax(sf_labels, axis=-1)
+
+            # calculate losses
+            hard_t = torch.tensor(gt_labels, dtype=torch.long, device=raw_logits.device)  # for gt_labels
+            soft_t = torch.tensor(np.asarray(sf_labels, dtype=np.float32), device=raw_logits.device)  # for weak_labels
+
+            gold_loss += torch.nn.functional.cross_entropy(
+                raw_logits.float(), hard_t, reduction="sum"
+            ).item()
+
+            weak_loss += torch.nn.functional.cross_entropy(
+                raw_logits.float(), soft_t, reduction="sum"
+            ).item()
+
 
             results.extend(
                 [
@@ -61,22 +80,24 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
                         idx=idx,
                         txt=txt,
                         input_ids=input_id,
-                        gt_label=label,
+                        gt_label=gt_label,
                         hard_label=pred,
                         acc=label == pred,
+                        gt_acc=gt_label == pred,
                         logits=logit,
                         soft_label=prob,
                     )
-                    for idx, input_id, txt, label, pred, prob, logit in zip(
-                        idxs, batch["input_ids"], batch["txt"], labels, preds, probs, logits
+                    for idx, input_id, txt, label, pred, prob, logit, gt_label in zip(
+                        idxs, batch["input_ids"], batch["txt"], labels, preds, probs, logits, gt_labels
                     )
                 ]
             )
+            n_total += raw_logits.shape[0]
+
         accs = [r["acc"] for r in results]
         print("Accuracy:", np.mean(accs), "+/-", np.std(accs) / np.sqrt(len(accs)))
 
-        return datasets.Dataset.from_list(results)
-
+        return datasets.Dataset.from_list(results), gold_loss/n_total, weak_loss/n_total
 
 
 def matchedness_eval(seed: int):
@@ -136,6 +157,7 @@ def matchedness_eval(seed: int):
         num_matched = len(matched_smp)
         num_unmatched = num_smp - num_matched
         matchedness_acc = num_matched / num_smp
+        assert num_unmatched != 0, "The number of unmatched samples is 0. You cannot use it in division."
 
         num_matched_1 = len(merged[ (merged["difficulty"] == 0) & (merged["difficulty_label"] == 0)])
         num_matched_2 = len(merged[ (merged["difficulty"] == 0) & (merged["difficulty_label"] == 1)])

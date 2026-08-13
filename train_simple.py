@@ -270,20 +270,21 @@ def main(
     random.seed(seed)
 
     # Load dataset                                                                                               # 다음과 같이 수정 필요
-    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs+n_valid_docs*2, test=n_test_docs))  # train=n_docs+n_valid_docs
+    dataset = load_dataset(ds_name, seed=seed, split_sizes=dict(train=n_docs, test=n_test_docs))  # train=n_docs+n_valid_docs
 
     # Split the training dataset in half
     train_dataset, test_ds = dataset["train"], dataset["test"]                 
 
-    if weak_labels_path is None:                                                    # 다음과 같이 수정 필요
-        split_data = train_dataset.train_test_split(test_size=0.5, seed=seed)       # train_size = n_docs/2 + n_valid_docs
-        train1_ds, train2_ds = split_data["train"], split_data["test"]              
-        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))      
-
+    if weak_labels_path is None:                                                    
         # split train and validation set
-        train_val_ds = train1_ds.train_test_split(test_size=n_valid_docs, seed=seed)  #
-        train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
+        train_val_ds = train_dataset.train_test_split(test_size=n_valid_docs, seed=seed)  
+        train_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
 
+        split_data = train_ds.train_test_split(test_size=0.5, seed=seed)       
+        train1_ds, train2_ds = split_data["train"], split_data["test"]              
+        print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))  
+        n_docs = len(train1_ds)
+    
         config_name = get_config_foldername(config)
     else:
         if not weak_labels_path.endswith("weak_labels"):
@@ -304,8 +305,8 @@ def main(
         train2_ds = None
 
         # validation set
-        train_val_ds = train1_ds.train_test_split(test_size=n_valid_docs, seed=seed)
-        train1_ds, valid_ds = train_val_ds["train"], train_val_ds["test"]
+        valid_ds_dir = os.path.join(os.path.dirname(weak_labels_path), "valid_ds")
+        valid_ds = load_from_disk(valid_ds_dir)
 
         weak_model_config = json.load(open(weak_labels_path.replace("weak_labels", "config.json")))
         config["weak_model_size"] = weak_model_config["model_size"]
@@ -333,7 +334,7 @@ def main(
     
     # Train and evaluation
     print(f"Training model model, size {model_size}")
-    test_results, inference_results = train_and_save_model(
+    test_results, inference_results, valid_ds = train_and_save_model(
         model_config,
         train1_ds,
         valid_ds,
@@ -356,11 +357,17 @@ def main(
         shared_info_file_dir=shared_info_file_dir
     )
 
-    # inference results means weak_ds
+    # Save datasets
+    # valid dataset
+    if valid_ds is not None:
+        valid_ds.save_to_disk(os.path.join(save_path, "valid_ds"))
+
+    # weak labels
     if inference_results is not None:      
         save_path_wl = save_path + "/" + "weak_labels"
         inference_results.save_to_disk(save_path_wl)
 
+    # test results
     if test_results is not None:
         test_results.save_to_disk(save_path)
 
@@ -567,8 +574,6 @@ def main(
         )
 
         # Save the classified dataset
-        dcl_diff_ds_len = {}
-        total_num = 0 
         diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
         idx_to_pos = {int(v): i for i, v in enumerate(train1_ds["idx"])}
 
@@ -585,16 +590,6 @@ def main(
             diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
             ds.save_to_disk(diff_ds_dir)
 
-            ds_len = len(ds)
-            dcl_diff_ds_len[f"num_{diff}(dcl)"] = ds_len
-            total_num += ds_len
-
-        dcl_diff_ds_len["%_easy(dcl)"] = dcl_diff_ds_len["num_easy(dcl)"]/total_num
-        dcl_diff_ds_len["%_overlap(dcl)"] = dcl_diff_ds_len["num_overlap(dcl)"]/total_num
-        dcl_diff_ds_len["%_hard(dcl)"] = dcl_diff_ds_len["num_hard(dcl)"]/total_num
-
-        with open(os.path.join(shared_info_file_dir, "diff_ds_length.json"), "w") as f:
-          json.dump(dcl_diff_ds_len, f, indent=2)
 
 if __name__ == "__main__":
     fire.Fire(main)

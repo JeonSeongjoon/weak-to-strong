@@ -43,10 +43,11 @@ def load_dataset(ds_name: str, seed: int = 0, split_sizes: Optional[dict] = None
     results = {}
     for split, n_docs in split_sizes.items():
         ds = cfg.loader(split)
-        try:
-            ds = ds.select(range(n_docs))
-        except IndexError as e:
-            print(f"Warning {ds_name} has less than {n_docs} docs, using all: {e}")
+        if split == "test":
+            try:
+                ds = ds.select(range(n_docs))
+            except IndexError as e:
+                print(f"Warning {ds_name} has less than {n_docs} docs, using all: {e}")
         ds = ds.map(functools.partial(cfg.formatter, rng=Random(seed)))
         ds = ds.map(
             _add_idx,

@@ -83,33 +83,46 @@ def train_model(
     else:
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule_fn)
 
+    steps_crt = 100000                        # stop training when "step" becomes a certain number.
     step = 0
     it = itertools.chain.from_iterable(itertools.repeat(ds, epochs))
     losses = []
     accuracies = []
-    thresholds = {}                       # Dictionary that has a thresholds value for each step     
-    sample_info = {}                       # Dictionary that has sample info for each sample
-    is_conf_induc_anc = loss_fn.name.startswith("conf_induc_anc")
-    is_conf_induc = loss_fn.name.startswith("conf_induc") and not is_conf_induc_anc
+    thresholds = {}                             
+    sample_info = {}                       
+    is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
+    is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
+
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
     # we use GPU 0 as the output device. This sadly means that this device will store
     # a bit more data than other ones, but hopefully should not be too big of a deal.
     io_device = model.device if hasattr(model, "device") else 0
 
-    while step < nsteps:
+    while step < nsteps and step <= steps_crt:
+
         loss_tot = 0
 
         if eval_every and (step + 1) % eval_every == 0:
-            eval_results = eval_model_acc(model, valid_ds, eval_batch_size)  
+            eval_results, gold_loss, weak_loss = eval_model_acc(model, valid_ds, eval_batch_size)  
             if gradient_checkpointing:
                 (
                     model if hasattr(model, "gradient_checkpointing_enable") else model.module
                 ).gradient_checkpointing_enable()
             if train_with_dropout:
                 model.train()
-            eval_accs = np.mean([r["acc"] for r in eval_results])
-            logger.logkv("valid_accuracy", eval_accs)
+            gt_accs = np.mean([r["gt_acc"] for r in eval_results])
+            weak_accs = np.mean([r["acc"] for r in eval_results])
+
+            # In gt model training, valid_loss_gd, valid_loss will be same. gt model has no weak label!
+            logger.logkv(
+                {
+                    "valid_accuracy_gd": gt_accs,
+                    "valid_loss_gd": gold_loss,
+                    "valid_accuracy": weak_accs,
+                    "valid_loss": weak_loss,
+                }
+            )
 
         all_logits = []
         all_labels = []
@@ -154,12 +167,14 @@ def train_model(
                 for key in ["idx", "difficulty", "confidence"]:
                     sample_info[key] = []
 
-            thresholds[f"step{step}"] = loss_fn.threshold
+            # logging threshold value for each step
+            thresholds[f"step{step}"] = loss_fn.threshold          
+
+            # logging sample info for each sample
             sample_es_or_olp = loss_fn.easy 
             sample_conf = loss_fn.conf
-            
             for i in range(len(all_idxs)):
-                diff_val = sample_es_or_olp[i]
+                diff_val = sample_es_or_olp[i]            
                 sample_info["idx"].append(all_idxs[i])
                 sample_info["difficulty"].append(diff_val.item() if hasattr(diff_val, "item") else diff_val)
                 sample_info["confidence"].append(sample_conf[i].item())
@@ -197,7 +212,7 @@ def train_model(
     final_eval_results = None
     if eval_every:
         print("Final evaluation:")
-        final_eval_results = eval_model_acc(model, eval_ds, eval_batch_size)
+        final_eval_results, _, _ = eval_model_acc(model, eval_ds, eval_batch_size)
         logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
         logger.dumpkvs()
 
@@ -297,6 +312,7 @@ def train_and_save_model(
     if already_trained:
         test_results = None
         inference_results = None
+        valid_ds = None
         # test_results = eval_model_acc(model, test_ds, eval_batch_size)
     else:
         start = time.time()
@@ -342,8 +358,9 @@ def train_and_save_model(
 
         inference_results = None
         if inference_ds:
-            inference_results = eval_model_acc(model, inference_ds, eval_batch_size)
+            inference_results, _, _ = eval_model_acc(model, inference_ds, eval_batch_size)
             logger.logkv("inference_accuracy", np.mean([r["acc"] for r in inference_results]))
+
     
         if save_path:
             with open(os.path.join(save_path, "results.pkl"), "wb") as f:
@@ -359,9 +376,14 @@ def train_and_save_model(
                     f,
                 )
 
+        # valid_ds이 이미 weak label화 되었다면, 굳이 다시 X
+        if (weak_model_size is None) and (valid_ds is not None):
+            valid_ds, _, _ = eval_model_acc(model, valid_ds, eval_batch_size)
+        else: 
+            valid_ds = None
    
     # try to clean up memory
     clear_mem()
     logger.shutdown()
 
-    return test_results, inference_results
+    return test_results, inference_results, valid_ds
