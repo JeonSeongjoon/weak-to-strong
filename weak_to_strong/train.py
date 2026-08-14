@@ -85,7 +85,7 @@ def train_model(
                        
     step = 0
     saving_interval = 320
-    stop_steps = 100000               # 450
+    stop_steps = 100000               # 490
     # stop training when "step" becomes a certain number.
     final_eval_results = None
     best_loss = 100
@@ -130,8 +130,8 @@ def train_model(
             )
 
             # nsteps should be bigger than saving_interval. If not, model would not save the final_eval_results
-            if (step > saving_interval) and gold_loss > best_loss:
-                print("Evaluation : the best valid acc model")
+            if (step > saving_interval) and gold_loss < best_loss:
+                print("Evaluation : the best valid loss model")
                 best_loss = gold_loss
                 final_eval_results, _, _ = eval_model_acc(model, eval_ds, eval_batch_size)
                 logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
