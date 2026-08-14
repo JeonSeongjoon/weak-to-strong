@@ -92,7 +92,9 @@ def train_model(
     sample_info = {}                       
     is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
     is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
-
+    final_eval_results = None
+    saving_interval = 320
+    best_acc = -1
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
     # we use GPU 0 as the output device. This sadly means that this device will store
@@ -100,7 +102,6 @@ def train_model(
     io_device = model.device if hasattr(model, "device") else 0
 
     while step < nsteps and step <= steps_crt:
-
         loss_tot = 0
 
         if eval_every and (step + 1) % eval_every == 0:
@@ -111,18 +112,27 @@ def train_model(
                 ).gradient_checkpointing_enable()
             if train_with_dropout:
                 model.train()
-            gt_accs = np.mean([r["gt_acc"] for r in eval_results])
-            weak_accs = np.mean([r["acc"] for r in eval_results])
+            gold_acc = np.mean([r["gt_acc"] for r in eval_results])
+            weak_acc = np.mean([r["acc"] for r in eval_results])
 
             # In gt model training, valid_loss_gd, valid_loss will be same. gt model has no weak label!
-            logger.logkv(
+            logger.logkvs(
                 {
-                    "valid_accuracy_gd": gt_accs,
+                    "valid_accuracy_gd": gold_acc,
                     "valid_loss_gd": gold_loss,
-                    "valid_accuracy": weak_accs,
-                    "valid_loss": weak_loss,
+                    "valid_accuracy_wk": weak_acc,
+                    "valid_loss_wk": weak_loss,
                 }
             )
+
+            # nsteps should be bigger than saving_interval. If not, model would not save the final_eval_results
+            if (step > saving_interval) and gold_acc > best_acc:
+                print("Evaluation : the best valid acc model")
+                best_acc = gold_acc
+                final_eval_results, _, _ = eval_model_acc(model, eval_ds, eval_batch_size)
+                logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
+
+
 
         all_logits = []
         all_labels = []
@@ -208,13 +218,7 @@ def train_model(
 
         step += 1
         logger.dumpkvs()
-
-    final_eval_results = None
-    if eval_every:
-        print("Final evaluation:")
-        final_eval_results, _, _ = eval_model_acc(model, eval_ds, eval_batch_size)
-        logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
-        logger.dumpkvs()
+    
 
     return final_eval_results, sample_info, thresholds
 
@@ -276,13 +280,13 @@ def train_and_save_model(
     # Load the model
     if model_config.model_parallel:
         assert torch.cuda.device_count() > 1, f"you might want more gpus for {model_config.name}"
-        ngpus = torch.cuda.device_count()
-        max_memory = {i:"20GiB" for i in range(ngpus)}
+        #ngpus = torch.cuda.device_count()
+        #max_memory = {i:"20GiB" for i in range(ngpus)}
         model = TransformerWithHead.from_pretrained(
             model_config.name,
             num_labels=2,
             device_map="auto",
-            max_memory=max_memory,
+            #max_memory=max_memory,
             linear_probe=linear_probe,
             **custom_kwargs,
         )

@@ -57,7 +57,7 @@ MODEL_CONFIGS = [
     ModelConfig(
         name="gpt2-xl",
         default_lr=1e-5,
-        eval_batch_size=2,
+        eval_batch_size=32,
         gradient_checkpointing=True,
         # Should use model_parallel on V100s (note: ironically if you have a single V100 it should run,
         # but if you have multiple it won't run without model_parallel because of the overhead of data
@@ -70,7 +70,7 @@ MODEL_CONFIGS = [
     ModelConfig(
         name="Qwen/Qwen-1_8B",
         default_lr=1e-5,
-        eval_batch_size=2,
+        eval_batch_size=32,
         gradient_checkpointing=True,
         model_parallel=(
             #torch.cuda.get_device_properties(0).total_memory < 50e9 and
@@ -86,7 +86,7 @@ MODEL_CONFIGS = [
     ModelConfig(
         name="Qwen/Qwen-7B",
         default_lr=1e-5,
-        eval_batch_size=2,
+        eval_batch_size=8,
         gradient_checkpointing=True,
         model_parallel=True,                  
         # I set the model_parallel flag false for Colab environment
@@ -102,7 +102,7 @@ MODEL_CONFIGS = [
     ModelConfig(
         name="Qwen/Qwen-14B",
         default_lr=1e-5,
-        eval_batch_size=2,
+        eval_batch_size=32,
         gradient_checkpointing=True,
         model_parallel=True,
         # note: you will probably not be able to run this bf16 support and without many gpus
@@ -174,7 +174,7 @@ def main(
     ds_name: str = "cosmos_qa",
     loss: str = "xent",
     n_docs: int = 20000,
-    n_valid_docs: int = 200,
+    n_valid_docs: int = 500,
     n_test_docs: int = 1000,
     model_size: str = "gpt2-large",
     lr: Optional[float] = None,

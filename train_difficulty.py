@@ -167,7 +167,7 @@ def main(
     ds_name: str = "cosmos_qa",
     loss: str = "conf_induc_anc",
     n_docs: int = 20000,
-    n_valid_docs: int = 200,
+    n_valid_docs: int = 500,
     n_test_docs: int = 1000,
     model_size: str = "gpt2-large",
     lr: Optional[float] = None,
