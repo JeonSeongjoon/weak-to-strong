@@ -82,26 +82,30 @@ def train_model(
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, nsteps)
     else:
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule_fn)
-
-    steps_crt = 100000                        # stop training when "step" becomes a certain number.
+                       
     step = 0
+    saving_interval = 320
+    stop_steps = 100000               # 450
+    # stop training when "step" becomes a certain number.
+    final_eval_results = None
+    best_loss = 100
+
     it = itertools.chain.from_iterable(itertools.repeat(ds, epochs))
     losses = []
+
     accuracies = []
     thresholds = {}                             
     sample_info = {}                       
     is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
     is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
-    final_eval_results = None
-    saving_interval = 320
-    best_acc = -1
+    
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
     # we use GPU 0 as the output device. This sadly means that this device will store
     # a bit more data than other ones, but hopefully should not be too big of a deal.
     io_device = model.device if hasattr(model, "device") else 0
 
-    while step < nsteps and step <= steps_crt:
+    while step < nsteps and step <= stop_steps:
         loss_tot = 0
 
         if eval_every and (step + 1) % eval_every == 0:
@@ -126,13 +130,11 @@ def train_model(
             )
 
             # nsteps should be bigger than saving_interval. If not, model would not save the final_eval_results
-            if (step > saving_interval) and gold_acc > best_acc:
+            if (step > saving_interval) and gold_loss > best_loss:
                 print("Evaluation : the best valid acc model")
-                best_acc = gold_acc
+                best_loss = gold_loss
                 final_eval_results, _, _ = eval_model_acc(model, eval_ds, eval_batch_size)
                 logger.logkv("eval_accuracy", np.mean([r["acc"] for r in final_eval_results]))
-
-
 
         all_logits = []
         all_labels = []
