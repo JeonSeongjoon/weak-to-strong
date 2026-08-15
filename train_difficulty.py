@@ -18,12 +18,13 @@ import weak_to_strong.logger as logger
 from weak_to_strong.common import get_tokenizer
 from weak_to_strong.datasets import (VALID_DATASETS, load_dataset,
                                      tokenize_dataset)
-from weak_to_strong.loss import (logconf_loss_fn, 
+from weak_to_strong.loss import (
+  logconf_loss_fn, 
     product_loss_fn, 
     xent_loss, 
     conf_induc_loss,
     conf_induc_anc_loss,
-    conf_induc_anc_filt_loss
+    conf_induc_anc_filt_loss,
 )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
@@ -303,6 +304,7 @@ def main(
     )
     
     loss_fn = loss_dict[loss]
+    print(loss_fn.name)
     
     # Train and evaluation
     print(f"Training model model, size {model_size}")

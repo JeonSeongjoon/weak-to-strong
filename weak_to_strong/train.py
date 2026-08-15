@@ -95,9 +95,10 @@ def train_model(
 
     accuracies = []
     thresholds = {}                             
-    sample_info = {}                       
-    is_conf_induc = loss_fn.name.startswith("conf_induc") and loss_fn.name != "conf_induc_anc"
-    is_conf_induc_anc = loss_fn.name == "conf_induc_anc"
+    sample_info = {}     
+    is_conf_induc_anc = loss_fn.name.startswith("conf_induc_anc")                  
+    is_conf_induc = loss_fn.name.startswith("conf_induc") and not is_conf_induc_anc
+    
     
 
     # If the model is wrapped by DataParallel, it doesn't have a device. In this case,
