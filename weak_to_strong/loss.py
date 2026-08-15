@@ -352,10 +352,7 @@ class conf_induc_anc_loss(LossFnBase):
         return loss.mean()
 
 class conf_induc_anc_filt_loss(LossFnBase):
-    """
-    diff = 0 -> weight 1 (학습에 사용)
-    diff = 1 -> weight 0 (무시)
-    """
+
     def __init__(self, warmup_frac: float = 0.1):
         self.name = "conf_induc_anc_filt"
         self.warmup_frac = warmup_frac
@@ -375,15 +372,15 @@ class conf_induc_anc_filt_loss(LossFnBase):
         if step_frac < self.warmup_frac:
             return torch.nn.functional.cross_entropy(logits, labels, reduction='none').mean()
 
-        coef = diff.float()          # unsqueeze 없음!
+        coef = diff.float()          
 
         # coef error protection
         if torch.any((coef < 0) | (coef > 1)):
             raise ValueError(f"diff must be in [0, 1], got range [{coef.min().item()}, {coef.max().item()}]")
 
-        w = 1.0 - coef               # hard -> 0, easy -> 1
+        w = 1.0 - coef               
 
-        if w.sum() == 0:             # 배치 전체가 hard일 때 graph 유지
+        if w.sum() == 0:             
             return logits.sum() * 0.0
 
         loss = torch.nn.functional.cross_entropy(logits, labels, reduction='none')
