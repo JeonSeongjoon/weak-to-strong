@@ -22,7 +22,8 @@ from weak_to_strong.loss import (logconf_loss_fn,
     product_loss_fn, 
     xent_loss, 
     conf_induc_loss,
-    conf_induc_anc_loss
+    conf_induc_anc_loss,
+    conf_induc_anc_filt_loss
 )
 from weak_to_strong.train import ModelConfig, train_and_save_model
 
@@ -135,8 +136,8 @@ loss_dict = {
     "logconf": logconf_loss_fn(),
     "product": product_loss_fn(),
     "xent": xent_loss(),
-    "conf_induc": conf_induc_loss(),
     "conf_induc_anc": conf_induc_anc_loss(),
+    "conf_induc_anc_filt": conf_induc_anc_filt_loss()
 }
 
 VALID_LOSSES: List[str] = list(loss_dict.keys())

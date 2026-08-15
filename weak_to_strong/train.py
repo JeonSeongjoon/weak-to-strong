@@ -85,7 +85,7 @@ def train_model(
                        
     step = 0
     saving_interval = 320
-    stop_steps = 100000               # 490
+    stop_steps = 490               # 490
     # stop training when "step" becomes a certain number.
     final_eval_results = None
     best_loss = 100

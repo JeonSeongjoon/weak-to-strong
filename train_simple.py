@@ -283,7 +283,6 @@ def main(
         split_data = train_ds.train_test_split(test_size=0.5, seed=seed)       
         train1_ds, train2_ds = split_data["train"], split_data["test"]              
         print("len(train1):", len(train1_ds), "len(train2):", len(train2_ds))  
-        n_docs = len(train1_ds)
     
         config_name = get_config_foldername(config)
     else:
@@ -303,6 +302,7 @@ def main(
         train1_ds = load_from_disk(weak_labels_path)
         print("Successfully load from disk.")
         train2_ds = None
+       
 
         # validation set
         valid_ds_dir = os.path.join(os.path.dirname(weak_labels_path), "valid_ds")
@@ -330,6 +330,7 @@ def main(
         train2_ds = tokenize_dataset(train2_ds, tokenizer, max_ctx)
     train1_ds.save_to_disk(os.path.join(save_path, 'train_ds/')) 
     loss_fn = loss_dict[loss]
+    n_docs = len(train1_ds)
 
     
     # Train and evaluation
