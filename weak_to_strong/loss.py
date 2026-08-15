@@ -281,6 +281,7 @@ class conf_induc_filt_loss(LossFnBase):
 
 
 class conf_induc_anc_loss(LossFnBase):
+
     def __init__(
         self,
         warmup_frac: float = 0.1,

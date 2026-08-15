@@ -50,8 +50,9 @@ def main(model_sizes: Union[List[str], str], **kwargs):
                 )
                 
         # STEP3 : Evaluate the matchedness (only easy, overlap, hard)
-        if w2s_loss == "conf_induc":
-            matchedness_eval(seed)
+        is_conf_induc = w2s_loss.startswith("conf_induc") and not ("anc" in w2s_loss)
+        if is_conf_induc:
+            matchedness_eval(seed=seed, loss=w2s_loss)
             print("Save the matchedness results\n")
     else:
         # implement train_difficulty.py

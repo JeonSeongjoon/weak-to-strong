@@ -270,8 +270,8 @@ def main(
     diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
 
     ds = None
-    for diff in ["easy", "overlap", "hard"]:
-        diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
+    for diff in ["easy", "overlap", "hard"]:   
+        diff_ds_dir = f"{result_dir}/diff_ds/seed={seed}/loss=xent/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
 
         curr_ds = load_from_disk(diff_ds_dir)
         if ds is None:
@@ -279,7 +279,7 @@ def main(
         else:
             ds = concatenate_datasets([ds, curr_ds])
 
-    train1_ds = ds.shuffle(seed=seed)         # Already tokenized
+    train1_ds = ds.shuffle(seed=seed)         
     train2_ds = None
     valid_ds = load_from_disk(os.path.join(weak_labels_prnt_path, "valid_ds"))
     print(f"len(train): {len(train1_ds)}, len(valid): {len(valid_ds)}")
@@ -332,7 +332,7 @@ def main(
     )
 
     if test_results is not None:
-        test_results.save_to_disk(save_path)
+        test_results.save_to_disk(os.path.join(save_path, "test_res"))
 
         acc = np.mean([x["acc"] for x in test_results])
         res_dict = {"accuracy": acc}

@@ -84,7 +84,7 @@ def train_model(
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule_fn)
                        
     step = 0
-    saving_interval = 320
+    saving_interval = 300
     stop_steps = 490               # 490
     # stop training when "step" becomes a certain number.
     final_eval_results = None
@@ -360,7 +360,7 @@ def train_and_save_model(
                 )
             # Save thresholds dict as json
             if thresholds:
-                with open(os.path.join(shared_info_file_dir, f"thresholds.json"), "w") as f:
+                with open(os.path.join(shared_info_file_dir, "thresholds.json"), "w") as f:
                     json.dump(thresholds, f, indent=2)
 
         inference_results = None

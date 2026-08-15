@@ -226,10 +226,9 @@ def main(
     ms_4_file = model_size.replace("/", "") if model_size is not None else model_size
 
     result_dir = "./weak-to-strong/results"
-    shared_info_file_dir = result_dir + f"/sample_difficulty/seed={seed}/wms:{wms_4_file}_ms:{ms_4_file}"
+    shared_info_file_dir = result_dir + f"/sample_difficulty/seed={seed}/loss={loss}/wms:{wms_4_file}_ms:{ms_4_file}"
     if wms_4_file is not None:
         os.makedirs(shared_info_file_dir, exist_ok=True)
-
 
     # The commented out terms are the ones that should not change final results
     config = {
@@ -332,7 +331,6 @@ def main(
     loss_fn = loss_dict[loss]
     n_docs = len(train1_ds)
 
-    
     # Train and evaluation
     print(f"Training model model, size {model_size}")
     test_results, inference_results, valid_ds = train_and_save_model(
@@ -370,7 +368,7 @@ def main(
 
     # test results
     if test_results is not None:
-        test_results.save_to_disk(save_path)
+        test_results.save_to_disk(os.path.join(save_path, "test_res"))
 
         acc = np.mean([x["acc"] for x in test_results])
         res_dict = {"accuracy": acc}
@@ -402,9 +400,10 @@ def main(
     #############################################################
 
     shared_acts_dir = Path(f"./weak-to-strong/activations/{ds_name}/n{n_docs}/seed={seed}")
-    
+    is_xent = loss == "xent"
+
     # Caching activations 
-    if weak_labels_path is None:
+    if weak_labels_path is None and is_xent:
         cfg = SFTConfig(
             dataset=ds_name,
             model_name = model_size,
@@ -478,7 +477,7 @@ def main(
 
 
     # Classifying samples as easy / overlap / hard
-    if weak_model_size is not None:
+    if (weak_model_size is not None) and is_xent:
 
         probe_name = "logreg"
         probe_cfg = LogisticProbeConfig()
@@ -559,13 +558,19 @@ def main(
         overlap_idx = rest_idx[align >= align_thr]
         easy_idx = rest_idx[align < align_thr]
 
-        print(f"easy={len(easy_idx)}, overlap={len(overlap_idx)}, hard={len(hard_idx)}")
+        # length of datasets
+        num_easy = len(easy_idx)
+        num_ovlp = len(overlap_idx)
+        num_hard = len(hard_idx)
+        num_total = num_easy + num_ovlp + num_hard
+
+        print(f"easy={num_easy}, overlap={num_ovlp}, hard={num_hard}")
 
         sample_diff_dict = {
             "idx": np.concatenate([easy_idx, overlap_idx, hard_idx]).tolist(),
-            "difficulty_label": [0] * len(easy_idx)
-            + [1] * len(overlap_idx)
-            + [2] * len(hard_idx),
+            "difficulty_label": [0] * num_easy
+            + [1] * num_ovlp
+            + [2] * num_hard,
         }
 
         # Save the classification results
@@ -575,7 +580,10 @@ def main(
         )
 
         # Save the classified dataset
-        diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}"
+        diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}/loss={loss}"
+        pair_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}"
+        os.makedirs(pair_dir, exist_ok=True)
+
         idx_to_pos = {int(v): i for i, v in enumerate(train1_ds["idx"])}
 
         for diff, idx_set in dict(
@@ -588,8 +596,20 @@ def main(
             ds = train1_ds.select(positions)
             ds = ds.add_column("difficulty", [1 if diff == "hard" else 0] * len(ds))
 
-            diff_ds_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}/{diff}_ds"
-            ds.save_to_disk(diff_ds_dir)
+            ds.save_to_disk(os.path.join(pair_dir, f"{diff}_ds"))
+
+        diff_ds_length = {
+            "num_easy": num_easy,
+            "num_overlap": num_ovlp,
+            "num_hard": num_hard,
+            "%_easy": num_easy / num_total,
+            "%_overlap": num_ovlp / num_total,
+            "%_hard": num_hard / num_total,
+            "num_total": num_total
+        }
+
+        with open(os.path.join(pair_dir, "diff_ds_length.json"), "w") as f:
+            json.dump(diff_ds_length, f, indent=2)
 
 
 if __name__ == "__main__":

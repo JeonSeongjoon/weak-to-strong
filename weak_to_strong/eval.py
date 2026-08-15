@@ -100,22 +100,28 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
         return datasets.Dataset.from_list(results), gold_loss/n_total, weak_loss/n_total
 
 
-def matchedness_eval(seed: int):
+def matchedness_eval(seed: int, loss: str):
 
-    shared_file_dir = Path(f"./weak-to-strong/results/sample_difficulty/seed={seed}")
-    folders = [p.name for p in shared_file_dir.iterdir() if p.is_dir()]
-    
+    base_dir = Path(f"./weak-to-strong/results/sample_difficulty/seed={seed}")
+    preds_root = base_dir / f"loss={loss}"
+    labels_root = base_dir / "loss=xent"
+
+    folders = [p.name for p in preds_root.iterdir() if p.is_dir()]
+
     for file_name in folders:
-        file_parent_dir = shared_file_dir / file_name
+        file_parent_dir = preds_root / file_name
 
-        # Evaluate the matchedness between sample predictions and labels
+        # preds는 해당 loss 폴더에서, labels는 xent 폴더에서 읽는다
         sample_info_preds_dir = file_parent_dir / "sample_info.csv"
-        sample_info_labels_dir = file_parent_dir / "sample_info_label.csv"
+        sample_info_labels_dir = labels_root / file_name / "sample_info_label.csv"
+
+        if not sample_info_preds_dir.exists() or not sample_info_labels_dir.exists():
+            print(f"skip {file_name}: missing csv")
+            continue
 
         sample_info_preds = pd.read_csv(sample_info_preds_dir)
         sample_info_labels = pd.read_csv(sample_info_labels_dir)
 
-        # epochs > 1이면 같은 idx가 에폭마다 반복 기록되므로, 각 idx의 마지막(최종 에폭) 기록만 남긴다
         sample_info_preds = sample_info_preds.drop_duplicates(subset="idx", keep="last")
         sample_info_labels = sample_info_labels.drop_duplicates(subset="idx", keep="last")
 
