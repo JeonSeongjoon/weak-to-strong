@@ -345,10 +345,10 @@ def train_and_save_model(
         if save_path and (weak_model_size is None):  
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
             # Just save the models when they are cases of ground truth training
-            (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
-                save_path,
-                safe_serialization=False
-            )
+            #(model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
+            #    save_path,
+            #    safe_serialization=False
+            #)
             print("saved", save_path)
 
         if (shared_info_file_dir is not None) and (weak_model_size is not None):
