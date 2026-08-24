@@ -10,7 +10,6 @@ import numpy as np
 import pandas as pd
 import torch
 from datasets import load_dataset, load_from_disk, DatasetDict
-from ruptures import Binseg
 from transformers import TrainingArguments
 
 
@@ -25,13 +24,14 @@ from weak_to_strong.loss import (logconf_loss_fn,
     conf_induc_filt_loss
 )
 from weak_to_strong.train import ModelConfig, train_and_save_model
-
+from weak_to_strong.classification import sample_dffidulty_classification
 
 from datacentric.sft import load_model_and_save_activations, load_activations
 from datacentric.sft_config import SFTConfig
 from datacentric.probe import ProbeConfig, LogisticProbeConfig
 from datacentric.model import ModelConfig as DLModelConfig
 from datacentric.probe import PROBES
+
 
 
 # NOTE learning rates are not particularly tuned, work somewhat reasonably at train batch size 32
@@ -331,6 +331,10 @@ def main(
     loss_fn = loss_dict[loss]
     n_docs = len(train1_ds)
 
+    acts_root_dir = Path(f"./weak-to-strong/activations/{ds_name}/cls/seed={seed}")
+    subfolder_dir = f"gt_model/ms:{ms_4_file}" if weak_model_size is None else f"loss={loss}/wms:{wms_4_file}_ms:{ms_4_file}"
+    acts_dir = acts_root_dir / subfolder_dir
+
     # Train and evaluation
     print(f"Training model model, size {model_size}")
     test_results, inference_results, valid_ds = train_and_save_model(
@@ -353,7 +357,9 @@ def main(
         optimizer_name=optim,
         eval_every=eval_every,
         weak_model_size=weak_model_size,
-        shared_info_file_dir=shared_info_file_dir
+        shared_info_file_dir=shared_info_file_dir,
+        acts_dir=acts_dir,
+        seed=seed
     )
 
     # Save datasets
@@ -477,139 +483,20 @@ def main(
 
 
     # Classifying samples as easy / overlap / hard
-    if (weak_model_size is not None) and is_xent:
+    #if (weak_model_size is not None):
+        #sample_dffidulty_classification(
+        #    shared_acts_dir=shared_acts_dir,
+        #    shared_info_file_dir=shared_info_file_dir,
+        #    result_dir=result_dir,
+        #    wms_4_file=wms_4_file,
+        #    ms_4_file=ms_4_file,
+        #    train_dataset=train_dataset,
+        #    train1_ds=train1_ds,
+        #    seed=seed,
+        #    loss=loss,
+        #)
 
-        probe_name = "logreg"
-        probe_cfg = LogisticProbeConfig()
-
-        weak_acts_dir = shared_acts_dir / f"ms:{wms_4_file}"
-        strong_acts_dir = shared_acts_dir / f"ms:{ms_4_file}"
-
-        x_weak_fit, weak_fit_idx = load_activations(weak_acts_dir / "probe_train.pt")
-        x_weak_tgt, weak_tgt_idx = load_activations(weak_acts_dir / "target.pt")
-        x_strong_tgt, strong_tgt_idx = load_activations(strong_acts_dir / "target.pt")
-
-        gt_by_idx = {
-            int(i): int(l) for i, l in zip(train_dataset["idx"], train_dataset["hard_label"])
-        }
-
-        fit_common = np.array(
-            sorted(set(weak_fit_idx.tolist()) & set(gt_by_idx)), dtype=np.int64
-        )
         
-        wf_pos = {int(v): i for i, v in enumerate(weak_fit_idx)}
-        X_fit = x_weak_fit[[wf_pos[int(i)] for i in fit_common]]
-        y_fit = torch.tensor([gt_by_idx[int(i)] for i in fit_common], device=X_fit.device)
-
-        weak_probe = PROBES[probe_name](probe_cfg)
-        weak_probe.fit(X_fit, y_fit)
-        print(f"Probe fitted on {len(fit_common)} samples (GT half)")
-
-        labeled_idx = set(int(i) for i in train1_ds["idx"])
-        common = np.array(
-            sorted(set(weak_tgt_idx.tolist()) & set(strong_tgt_idx.tolist()) & labeled_idx),
-            dtype=np.int64,
-        )
-        print(
-            f"weak tgt: {len(weak_tgt_idx)}, strong tgt: {len(strong_tgt_idx)}, "
-            f"labeled ds: {len(labeled_idx)}, common: {len(common)}"
-        )
-
-        overlap_chk = set(fit_common.tolist()) & set(common.tolist())
-        assert not overlap_chk, (
-            f"probe fit set overlaps target set on {len(overlap_chk)} idx. "
-            f"Stale activation cache?"
-        )
-        if len(common) < 10:
-            raise RuntimeError(
-                "Too few overlapping idx. Did you regenerate activations after the fix?"
-            )
-
-        wt_pos = {int(v): i for i, v in enumerate(weak_tgt_idx)}
-        st_pos = {int(v): i for i, v in enumerate(strong_tgt_idx)}
-        x_weak = x_weak_tgt[[wt_pos[int(i)] for i in common]]
-        x_strong = x_strong_tgt[[st_pos[int(i)] for i in common]]
-
-        p = weak_probe.predict(x_weak).detach().float().cpu().numpy().reshape(-1)
-
-        conf = 2 * np.abs(p - 0.5)
-        sorted_conf = np.sort(conf)
-        cp = Binseg(model="l2").fit(sorted_conf.reshape(-1, 1)).predict(n_bkps=1)[0]
-        conf_thr = sorted_conf[min(cp, len(sorted_conf) - 1)]
-
-        hard_mask = conf <= conf_thr
-        rest_mask = ~hard_mask
-        if hard_mask.sum() == 0 or rest_mask.sum() == 0:
-            raise RuntimeError(f"Degenerate confidence split: hard={hard_mask.sum()}")
-
-        x_strong_np = x_strong.detach().float().cpu().numpy()
-        Xh = x_strong_np[hard_mask]
-        Xr = x_strong_np[rest_mask]
-        Xh_n = Xh / np.linalg.norm(Xh, axis=1, keepdims=True)
-        Xr_n = Xr / np.linalg.norm(Xr, axis=1, keepdims=True)
-        align = np.abs(Xr_n @ Xh_n.T).max(axis=1)
-
-        sorted_align = np.sort(align)
-        cp2 = Binseg(model="l2").fit(sorted_align.reshape(-1, 1)).predict(n_bkps=1)[0]
-        align_thr = sorted_align[min(cp2, len(sorted_align) - 1)]
-
-        hard_idx = common[hard_mask]
-        rest_idx = common[rest_mask]
-        overlap_idx = rest_idx[align >= align_thr]
-        easy_idx = rest_idx[align < align_thr]
-
-        # length of datasets
-        num_easy = len(easy_idx)
-        num_ovlp = len(overlap_idx)
-        num_hard = len(hard_idx)
-        num_total = num_easy + num_ovlp + num_hard
-
-        print(f"easy={num_easy}, overlap={num_ovlp}, hard={num_hard}")
-
-        sample_diff_dict = {
-            "idx": np.concatenate([easy_idx, overlap_idx, hard_idx]).tolist(),
-            "difficulty_label": [0] * num_easy
-            + [1] * num_ovlp
-            + [2] * num_hard,
-        }
-
-        # Save the classification results
-        print("========== Save the classification results ==========\n")
-        pd.DataFrame(sample_diff_dict).to_csv(
-            os.path.join(shared_info_file_dir, "sample_info_label.csv"), index=False
-        )
-
-        # Save the classified dataset
-        diff_ds_prnt_dir = result_dir + f"/diff_ds/seed={seed}/loss={loss}"
-        pair_dir = diff_ds_prnt_dir + f"/wms:{wms_4_file}_ms:{ms_4_file}"
-        os.makedirs(pair_dir, exist_ok=True)
-
-        idx_to_pos = {int(v): i for i, v in enumerate(train1_ds["idx"])}
-
-        for diff, idx_set in dict(
-            easy=easy_idx, overlap=overlap_idx, hard=hard_idx
-        ).items():
-            missing = [int(i) for i in idx_set if int(i) not in idx_to_pos]
-            assert not missing, f"{len(missing)} idx missing from train1_ds: {missing[:5]}"
-
-            positions = [idx_to_pos[int(i)] for i in idx_set]
-            ds = train1_ds.select(positions)
-            ds = ds.add_column("difficulty", [1 if diff == "hard" else 0] * len(ds))
-
-            ds.save_to_disk(os.path.join(pair_dir, f"{diff}_ds"))
-
-        diff_ds_length = {
-            "num_easy": num_easy,
-            "num_overlap": num_ovlp,
-            "num_hard": num_hard,
-            "%_easy": num_easy / num_total,
-            "%_overlap": num_ovlp / num_total,
-            "%_hard": num_hard / num_total,
-            "num_total": num_total
-        }
-
-        with open(os.path.join(pair_dir, "diff_ds_length.json"), "w") as f:
-            json.dump(diff_ds_length, f, indent=2)
 
 
 if __name__ == "__main__":

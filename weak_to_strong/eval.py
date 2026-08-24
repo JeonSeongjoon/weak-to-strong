@@ -46,7 +46,7 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
             # pad input_ids to common length
             input_ids = torch.nn.utils.rnn.pad_sequence(
                 [torch.tensor(ex) for ex in batch["input_ids"]], batch_first=True
-            ).to(model.device if hasattr(model, "device") else "cpu")
+            ).to(next(model.parameters()).device)
 
             gt_labels = batch["gt_label"] if "gt_label" in batch else np.argmax(batch["soft_label"], axis=-1)
             sf_labels = batch["soft_label"]
@@ -65,13 +65,8 @@ def eval_model_acc(model: nn.Module, ds: datasets.Dataset, eval_batch_size: int 
             hard_t = torch.tensor(gt_labels, dtype=torch.long, device=raw_logits.device)  # for gt_labels
             soft_t = torch.tensor(np.asarray(sf_labels, dtype=np.float32), device=raw_logits.device)  # for weak_labels
 
-            gold_loss += torch.nn.functional.cross_entropy(
-                raw_logits.float(), hard_t, reduction="sum"
-            ).item()
-
-            weak_loss += torch.nn.functional.cross_entropy(
-                raw_logits.float(), soft_t, reduction="sum"
-            ).item()
+            gold_loss += torch.nn.functional.cross_entropy(raw_logits.float(), hard_t, reduction="sum").item()
+            weak_loss += torch.nn.functional.cross_entropy(raw_logits.float(), soft_t, reduction="sum").item()
 
 
             results.extend(

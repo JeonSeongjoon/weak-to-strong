@@ -5,6 +5,7 @@ import time
 import json
 from dataclasses import dataclass
 from typing import Callable, Optional
+from pathlib import Path
 
 import datasets
 import numpy as np
@@ -12,12 +13,15 @@ import pandas as pd
 import torch
 import torch_optimizer as toptim
 from transformers.modeling_utils import load_sharded_checkpoint
+from transformers import set_seed
 
 import weak_to_strong.logger as logger
 from weak_to_strong.common import clear_mem
 from weak_to_strong.eval import eval_model_acc
 from weak_to_strong.loss import xent_loss
 from weak_to_strong.model import TransformerWithHead
+
+from datacentric.sft_utils import gather_hiddens
 
 
 @dataclass
@@ -47,10 +51,13 @@ def train_model(
     train_with_dropout: bool = False,
     epochs: int = 1,
     lr_schedule: str = "cosine_anneal",
-    optimizer_name: str = "adam"
+    optimizer_name: str = "adam",
+    seed: int = None,
 ):
+    set_seed(seed) 
     print("LR", lr, "batch_size", batch_size, "minibatch_size", minibatch_size)
     assert batch_size % minibatch_size == 0, "batch size must be divisible by minibatch size"
+
     # we purposefully turn off dropout, for determinism
     # this seems to help for 1 epoch finetuning anyways
     if train_with_dropout:
@@ -85,7 +92,7 @@ def train_model(
                        
     step = 0
     saving_interval = 300
-    stop_steps = 490               # 490
+    stop_steps = 480               # 490
     # stop training when "step" becomes a certain number.
     final_eval_results = None
     best_loss = 100
@@ -248,7 +255,9 @@ def train_and_save_model(
     optimizer_name: str = "adam",
     eval_every: Optional[int] = None,
     weak_model_size: Optional[str] = None,
-    shared_info_file_dir: str = None
+    shared_info_file_dir: str = None,
+    acts_dir, # Path
+    seed: int = None
 ):
     if eval_batch_size is None:
         eval_batch_size = batch_size
@@ -298,11 +307,13 @@ def train_and_save_model(
         minibatch_size = minibatch_size_per_device
     else:
         model = TransformerWithHead.from_pretrained(
-            model_config.name, num_labels=2, linear_probe=linear_probe, **custom_kwargs
+            model_config.name, 
+            num_labels=2, 
+            linear_probe=linear_probe, 
+            **custom_kwargs
         ).to("cuda")
         already_trained = maybe_load_model(model)
         # data parallel:  currently not supported with model parallel
-
         minibatch_size = min(minibatch_size_per_device * torch.cuda.device_count(), batch_size)
 
         if torch.cuda.device_count() > 1:
@@ -338,30 +349,64 @@ def train_and_save_model(
             minibatch_size=minibatch_size,
             train_with_dropout=train_with_dropout,
             lr_schedule=lr_schedule,
-            optimizer_name=optimizer_name
+            optimizer_name=optimizer_name,
+            seed=seed,
         )
         print("Model training took", time.time() - start, "seconds")
+
         
         if save_path and (weak_model_size is None):  
             # Note: If the model is wrapped by DataParallel, we need to unwrap it before saving
             # Just save the models when they are cases of ground truth training
-            #(model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
-            #    save_path,
-            #    safe_serialization=False
-            #)
+            (model if hasattr(model, "save_pretrained") else model.module).save_pretrained(
+                save_path,
+                safe_serialization=False
+            )
             print("saved", save_path)
+
+        # save activations
+        acts_dir.mkdir(parents=True, exist_ok=True)
+        base = model.module if hasattr(model, "module") else model
+        acts, idxs = gather_hiddens(base.transformer, test_ds)
+
+        torch.save(
+            {"acts": acts.cpu(), "idx": idxs.cpu(), "model": model_config.name},
+            acts_dir / "st_target.pt",
+        )
+        print(f"Saved {len(idxs)} strong activations to {acts_dir}")
+        
 
         if (shared_info_file_dir is not None) and (weak_model_size is not None):
             # Save sample info as pandas?
             if sample_info:
-                pd.DataFrame(sample_info).to_csv(
+                df = pd.DataFrame(sample_info)
+                df.to_csv(
                     os.path.join(shared_info_file_dir, 'sample_info.csv'), 
                     index=False
                 )
+
+                num_total = len(df["difficulty"])
+                None_mask = df["difficulty"].notna()
+                hard_mask = df["difficulty"] == 1
+                num_total_filtered = len(df[None_mask])
+                num_hard = int(hard_mask.sum())
+                num_esovlp = num_total_filtered - num_hard
+
+                sample_info_len = {
+                    "num_easy_or_overlap": num_esovlp,
+                    "num_hard": num_hard,
+                    "%_easy_or_overlap": num_esovlp / num_total,
+                    "%_hard": num_hard / num_total,
+                    "total": num_total,
+                }
+                with open(os.path.join(shared_info_file_dir, 'sample_info_len.json'), "w") as f:
+                    json.dump(sample_info_len, f, indent=2)
+
             # Save thresholds dict as json
             if thresholds:
                 with open(os.path.join(shared_info_file_dir, "thresholds.json"), "w") as f:
                     json.dump(thresholds, f, indent=2)
+
 
         inference_results = None
         if inference_ds:

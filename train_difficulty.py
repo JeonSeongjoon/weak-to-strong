@@ -304,6 +304,10 @@ def main(
     )
     
     loss_fn = loss_dict[loss]
+    acts_dir = Path(
+        f"./weak-to-strong/activations/{ds_name}/cls"
+        f"/seed={seed}/loss={loss}/wms:{wms_4_file}_ms:{ms_4_file}"
+    )
     print(loss_fn.name)
     
     # Train and evaluation
@@ -328,7 +332,8 @@ def main(
         optimizer_name=optim,
         eval_every=eval_every,
         weak_model_size=weak_model_size,
-        shared_info_file_dir=shared_info_file_dir
+        shared_info_file_dir=shared_info_file_dir,
+        acts_dir=acts_dir
     )
 
     if test_results is not None:

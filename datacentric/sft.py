@@ -546,8 +546,6 @@ def load_model_and_save_activations(
     It also optionally predicts on ds_dict["predict"] and saves the predictions.
     """
     save_dir = Path(train_args.output_dir)
-    results_path = save_dir / "results.json"
-
     os.makedirs(save_dir, exist_ok=True)
 
     clear_mem()
@@ -555,10 +553,6 @@ def load_model_and_save_activations(
     print(f"{get_gpu_mem_used() * 100:.2f}% of all GPU memory in use before toker init")
     tokenizer = init_tokenizer(model_cfg)
     model = None
-
-    #def process(examples):
-    #   return tokenizer(examples["txt"], truncation=True)
-    #ds_dict = ds_dict.map(process, batched=True)
 
 
     if acts_dir.exists() and all((acts_dir / f"{name}.pt").exists() for name in ds_dict.keys()):

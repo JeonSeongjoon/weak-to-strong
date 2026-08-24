@@ -47,6 +47,7 @@ def gather_hiddens(
     model: torch.nn.Module, 
     dataset: Dataset
 ):
+    model.eval()
     dataset = dataset.with_format("torch", device="cuda")
 
     cfg = assert_type(PretrainedConfig, model.config)
@@ -61,7 +62,8 @@ def gather_hiddens(
         ex = assert_type(dict, ex)
 
         out = model(ex["input_ids"][None], output_hidden_states=True)
-        act = torch.stack(out.hidden_states)[:, 0, -1]  # Final token
+        dev = out.hidden_states[-1].device
+        act = torch.stack([h[0, -1].to(dev) for h in out.hidden_states])
         if act.shape != (L, D):
             raise ValueError(f"Unexpected shape {act.shape} for hidden states on example {i}")
         buffer[i] = act[-1, :]
